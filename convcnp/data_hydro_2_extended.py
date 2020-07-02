@@ -10,9 +10,10 @@ import time
 import datetime
 import matplotlib.pyplot as plt
 
+from .task_preprocessing import *
 from .utils import device
 
-__all__ = ['SawtoothGenerator', 'HydroGenerator']
+__all__ = ['HydroGenerator']
 
 def _rand(val_range, *shape):
     lower, upper = val_range
@@ -83,9 +84,9 @@ class DataGenerator(metaclass=abc.ABCMeta):
         self.num_tasks = num_tasks
         self.x_range = x_range
         self.min_train_points = min_train_points
-        self.min_test_points = max_test_points
-        self.max_train_points = max(max_train_points, 3)
-        self.max_test_points = max(max_test_points, 3)
+        self.min_test_points = min_test_points
+        self.max_train_points = max_train_points
+        self.max_test_points = max_test_points
 
     @abc.abstractmethod
     def sample(self,x):
@@ -114,7 +115,8 @@ class HydroGenerator(DataGenerator):
     
     def __init__(self,
                 dataframe,
-                s_year  = 2000,
+                df_att,
+                s_year = 2000,
                 s_month = 6,
                 s_day = 1,
                 e_year = 2000,
@@ -122,15 +124,18 @@ class HydroGenerator(DataGenerator):
                 e_day = 30,
                 channels_c = ['OBS_RUN'],
                 channels_t = ['OBS_RUN'],
+                channels_att = ['gauge_id'],
+                channels_t_val = ['OBS_RUN_log_n_mean'],
                 context_mask = [1,1,1,1],
                 target_mask = [0,1,1,1],
                 extrapolate = True,
                 timeslice = 60,
-                observe_at_target = False,
-                feature_embedding = True,
+                test_time = False,
+                dropout_rate = 0,
                 **kw_args):     
 
         self.dataframe = dataframe
+        self.df_att = df_att
         self.s_year = s_year
         self.s_month = s_month
         self.s_day = s_day
@@ -139,17 +144,25 @@ class HydroGenerator(DataGenerator):
         self.e_day = e_day
         self.channels_c = channels_c
         self.channels_t = channels_t
+        self.channels_att = channels_att
+        self.channels_t_val = channels_t_val
         self.context_mask = context_mask
         self.target_mask = target_mask
         self.extrapolate = extrapolate
         self.timeslice = timeslice
-        self.observe_at_target = observe_at_target
-        self.feature_embedding = feature_embedding
+        self.test_time = test_time
+        self.dropout_rate = dropout_rate
         DataGenerator.__init__(self,**kw_args)
     
     def sample(self,x,df):
-        return np.vstack(tuple(df[key][x] for key in self.channels_c)), np.vstack(tuple(df[key][x] for key in self.channels_t)) 
+        return np.vstack(tuple(df[key][x] for key in self.channels_c)), np.vstack(tuple(df[key][x] for key in self.channels_t)), np.vstack(tuple(df[key][x] for key in self.channels_t_val)) 
     
+    def sample_att(self,hru08):
+        return np.vstack(tuple(self.df_att[key][self.df_att['hru08']==hru08] for key in self.channels_att))
+
+    def sample_date(self,x,df):
+        return np.vstack(tuple(df[key][x] for key in ['YR','DOY']))
+
     def generate_task(self):
         task = {'x': [],
                 'y': [],
@@ -157,6 +170,8 @@ class HydroGenerator(DataGenerator):
                 'y_context': [],
                 'x_target': [],
                 'y_target': [],
+                'y_target_val': [],
+                'y_att': [],
                 }
         
         # Determine number of test and train points.
@@ -164,31 +179,50 @@ class HydroGenerator(DataGenerator):
         num_test_points = np.random.randint(self.min_test_points, self.max_test_points + 1)
         num_points = num_train_points + num_test_points
         
-        randoms = np.random.randint(0,len(self.dataframe),self.batch_size)
-        ids = self.dataframe['id'].iloc[randoms].tolist()
-        year = self.dataframe['YR'].iloc[randoms].tolist()
-        df = self.dataframe[(self.dataframe['id'].isin(ids) | (self.dataframe['id_lag'].isin(ids)))]
-
-        f_labels = [0.25,0.50,0.75,1]
+        # Generate a random integer for each element in the bacth 
+        randoms = np.random.randint(0,len(self.dataframe)-self.timeslice,self.batch_size)
+        ids, year, hru08 = np.stack(self.dataframe[['id','YR','hru08']].iloc[randoms].values,axis=1).tolist()
+        #df = self.dataframe[(self.dataframe['id'].isin(ids) | (self.dataframe['id_lag'].isin(ids)))]
 
         for i in range(self.batch_size):
         # Sample inputs and outputs.
-            ##x = _rand(self.x_range, num_points)
+            #x = _rand(self.x_range, num_points)
+            df = self.dataframe.iloc[randoms[i]:randoms[i]+self.timeslice]
+            df_s = df.copy()
+            #df_s = df[((df['id']==ids[i]) | (df['id_lag']==ids[i]))].copy()
+            #df_s.drop_duplicates(inplace=True)
+            #df_s.reset_index(drop=True, inplace=True)
+            #df_s = df[((df['YR']==year[i]) | (df['YR']==year[i]+1)) & (df['hru08']==basin[i])]
+            #s_ind, e_ind = np.array([]), np.array([])
+            
+            #pdb.set_trace()
+            s_ind = randoms[i]
+            e_ind = randoms[i] + self.timeslice
 
-            df_s = df[((df['id']==ids[i]) | (df['id_lag']==ids[i]))]
-            s_ind, e_ind = np.array([]), np.array([])
-
-            while (s_ind.size == 0) | (e_ind.size == 0):
-                rand = np.random.randint(0,len(df_s)-self.timeslice)
+            """while (s_ind.size == 0) | (e_ind.size == 0):
+                rand = None
+                while rand == None:
+                    if len(df_s)>self.timeslice:
+                        rand = np.random.randint(0,len(df_s)-self.timeslice)
+                    
                 DOY = df_s['DOY'].iloc[rand]
                 s_ind = df_s.index[(df_s['YR']==year[i]) & (df_s['DOY']==DOY)].values
                 e_ind = s_ind + self.timeslice
 
+            if len(s_ind) + len(e_ind) > 2:
+                pdb.set_trace()"""
+
             x_ind = _rand((s_ind, e_ind),num_points)
+            
             if self.extrapolate == True:
                 x_ind = sorted(x_ind)
 
-            y, y_t = self.sample(x_ind,df_s)
+            try:
+                y, y_t, y_t_val = self.sample(x_ind,df_s)
+            except:
+                pdb.set_trace()
+
+            y_att = self.sample_att(hru08[i])
 
             x = np.divide(np.array(x_ind) - s_ind, e_ind - s_ind)
 
@@ -206,6 +240,8 @@ class HydroGenerator(DataGenerator):
             task['x_context'].append(x[inds_train])
             task['x_target'].append(x[inds_test])
 
+            task['y_att'].append(y_att)
+
             y_aux, y_context_aux, y_target_aux = [], [], []
             
             for i in range(len(y)):
@@ -222,64 +258,127 @@ class HydroGenerator(DataGenerator):
             #task['y'].append(y[0][np.argsort(x)])
             #task['y_context'].append(y[0][inds_train])
             #task['y_target'].append(y[0][inds_test])
+            task['y_target_val'].append(y_t_val[0][inds_test])
 
         # Stack batch and convert to PyTorch.
         task = {k: torch.tensor(_uprank(np.stack(v, axis=0)),
                                 dtype=torch.float32).to(device)
                 for k, v in task.items()}
 
-        if self.observe_at_target == True:
-            task['x_context'] = torch.cat([task['x_context'],task['x_target']],dim=1)
-            task['y_context'] = torch.cat([task['y_context'],task['y_target']],dim=1)
-            
-        task['y_target'] = task['y_target'][:,:,0].unsqueeze(dim=2)
-        
-        task['m_context'] = torch.tensor(self.context_mask)[None,None,:].repeat(self.batch_size,num_train_points,1).to(device)
-        task['m_target'] = torch.tensor(self.target_mask)[None,None,:].repeat(self.batch_size,num_test_points,1).to(device)
-        task['m'] = torch.cat([task['m_context'],task['m_target']],dim=1).to(device)
-        task['f'] = torch.tensor(f_labels)[None,None,:].repeat(self.batch_size,num_points,1).to(device)
+        task['y_att'] = task['y_att'].permute([0,2,1])
+        task['y_att_context'] = task['y_att'] * torch.ones(task['x_context'].shape).to(device)
+        task['y_att_target'] = task['y_att'] * torch.ones(task['x_target'].shape).to(device)
+        task['y_context'] = torch.cat([task['y_context'],task['y_att_context']],dim=2)
+        task['y_target'] = torch.cat([task['y_target'],task['y_att_target']],dim=2)
+
+        task = prep_task(task,
+                            context_mask=self.context_mask,
+                            target_mask=self.target_mask,
+                            dropout_rate=0,
+                            embedding=True,
+                            observe_at_target=True)
+
         return task
 
-class SawtoothGenerator(DataGenerator):
+    def generate_test_task(self,year,basin):
+        task = {'x': [],
+                'y': [],
+                'x_context': [],
+                'y_context': [],
+                'x_target': [],
+                'y_target': [],
+                'y_target_val': [],
+                'y_att': [],
+                'yr_context': [],
+                'yr_target': [],
+                'doy_context': [],
+                'doy_target': [],
+                }
+        
+        # Determine number of test and train points.
+        num_train_points = np.random.randint(self.min_train_points, self.max_train_points + 1)
+        num_test_points = np.random.randint(self.min_test_points, self.max_test_points + 1)
+        num_points = num_train_points + num_test_points
+        
+        ids = self.dataframe['id'][(self.dataframe['hru08']==basin)&(self.dataframe['YR']==year)].unique()[0]
+        df = self.dataframe[(self.dataframe['id']==ids) | (self.dataframe['id_lag']==ids)]
+        #print("Length of df: ", len(df))
+        self.batch_size = len(df) - self.timeslice
+        #print("Length of batch", self.batch_size)
+        hru08 = df['hru08'].unique()[0]
 
-    """Generate samples from a random sawtooth.
+        for i in range(self.batch_size):
+        # Sample inputs and outputs.
+            df_s = df.copy()
+            df_s.drop_duplicates(inplace=True)
+            df_s = df_s.reset_index(drop=True)
+            s_ind = i
+            e_ind = self.timeslice + i
+            #print(s_ind,e_ind)
 
-    Further takes in keyword arguments for :class:`.data.DataGenerator`. The
-    default numbers for `max_train_points` and `max_test_points` are 100.
+            x_ind = np.arange(s_ind, e_ind)
 
-    Args:
-        freq_dist (tuple[float], optional): Lower and upper bound for the
-            random frequency. Defaults to [3, 5].
-        shift_dist (tuple[float], optional): Lower and upper bound for the
-            random shift. Defaults to [-5, 5].
-        trunc_dist (tuple[float], optional): Lower and upper bound for the
-            random truncation. Defaults to [10, 20].
-    """
+            y, y_t, y_t_val = self.sample(x_ind,df_s)
+            y_att = self.sample_att(hru08)
+            x_date = self.sample_date(x_ind,df_s)
 
-    def __init__(self,
-                 freq_dist=(3, 5),
-                 shift_dist=(-5, 5),
-                 trunc_dist=(10, 20),
-                 max_train_points=100,
-                 max_test_points=100,
-                 **kw_args):
-        self.freq_dist = freq_dist
-        self.shift_dist = shift_dist
-        self.trunc_dist = trunc_dist
-        DataGenerator.__init__(self,
-                               max_train_points=max_train_points,
-                               max_test_points=max_test_points,
-                               **kw_args)
+            x = np.divide(np.array(x_ind) - s_ind, e_ind - s_ind)
 
-    def sample(self, x):
-        # Sample parameters of sawtooth.
-        amp = 1
-        freq = _rand(self.freq_dist)
-        shift = _rand(self.shift_dist)
-        trunc = np.random.randint(self.trunc_dist[0], self.trunc_dist[1] + 1)
+            # Determine indices for train and test set.
+            if self.extrapolate == False:
+                inds = np.random.permutation(len(x))
+            elif self.extrapolate == True:
+                inds = np.arange(len(x))
+            
+            inds_train = sorted(inds[:num_train_points])
+            inds_test = sorted(inds[num_train_points:num_points])
 
-        # Construct expansion.
-        x = x[:, None] + shift
-        k = np.arange(1, trunc + 1)[None, :]
-        return 0.5 * amp - amp / np.pi * \
-               np.sum((-1) ** k * np.sin(2 * np.pi * k * freq * x) / k, axis=1)
+            # Record to task.
+            task['x'].append(sorted(x))
+            task['x_context'].append(x[inds_train])
+            task['x_target'].append(x[inds_test])
+            
+            task['doy_context'].append(x_date[1][inds_train])
+            task['yr_context'].append(x_date[0][inds_train])
+            task['doy_target'].append(x_date[1][inds_test])
+            task['yr_target'].append(x_date[0][inds_test])
+
+            task['y_att'].append(y_att)
+
+            y_aux, y_context_aux, y_target_aux = [], [], []
+            
+            for i in range(len(y)):
+                y_aux.append(y[i][np.argsort(x)])
+                y_context_aux.append(y[i][inds_train])
+            
+            for i in range(len(y_t)):
+                y_target_aux.append(y_t[i][inds_test])
+            
+            task['y'].append(np.stack(y_aux,axis=1).tolist())
+            task['y_context'].append(np.stack(y_context_aux,axis=1).tolist())
+            task['y_target'].append(np.stack(y_target_aux,axis=1).tolist())
+
+            #task['y'].append(y[0][np.argsort(x)])
+            #task['y_context'].append(y[0][inds_train])
+            #task['y_target'].append(y[0][inds_test])
+            task['y_target_val'].append(y_t_val[0][inds_test])
+
+        # Stack batch and convert to PyTorch.
+        task = {k: torch.tensor(_uprank(np.stack(v, axis=0)),
+                                dtype=torch.float32).to(device)
+                for k, v in task.items()}
+
+        task['y_att'] = task['y_att'].permute([0,2,1])
+        task['y_att_context'] = task['y_att'] * torch.ones(task['x_context'].shape).to(device)
+        task['y_att_target'] = task['y_att'] * torch.ones(task['x_target'].shape).to(device)
+        task['y_context'] = torch.cat([task['y_context'],task['y_att_context']],dim=2)
+        task['y_target'] = torch.cat([task['y_target'],task['y_att_target']],dim=2)
+
+        task = prep_task(task,
+                            context_mask=self.context_mask,
+                            target_mask=self.target_mask,
+                            dropout_rate=self.dropout_rate,
+                            embedding=True,
+                            observe_at_target=True)
+
+        return task

@@ -56,7 +56,6 @@ class LambdaIterator:
     def __iter__(self):
         return self
 
-
 class DataGenerator(metaclass=abc.ABCMeta):
     """Data generator for GP samples.
 
@@ -76,11 +75,15 @@ class DataGenerator(metaclass=abc.ABCMeta):
                  batch_size=16,
                  num_tasks=256,
                  x_range=(-2, 2),
-                 max_train_points=10,
-                 max_test_points=10):
+                 min_train_points = 10,
+                 min_test_points = 10,
+                 max_train_points=15,
+                 max_test_points=15):
         self.batch_size = batch_size
         self.num_tasks = num_tasks
         self.x_range = x_range
+        self.min_train_points = min_train_points
+        self.min_test_points = max_test_points
         self.max_train_points = max(max_train_points, 3)
         self.max_test_points = max(max_test_points, 3)
 
@@ -103,89 +106,89 @@ class DataGenerator(metaclass=abc.ABCMeta):
                 `y_context`, `x_target`, and `y_target.
         """
         
-        task = {#'x': [],
+        task = {'x': [],
                 'y': [],
-                #'x_context': [],
+                'x_context': [],
                 'y_context': [],
-                #'x_target': [],
+                'x_target': [],
                 'y_target': [],
-                'x_0': [],
-                'x_1': [],
-                'x_context_0': [],
-                'x_target_0': [],
-                'x_context_1': [],
-                'x_target_1': [],
                 }
         
         # Determine number of test and train points.
-        num_train_points = np.random.randint(3, self.max_train_points + 1)
-        num_test_points = np.random.randint(3, self.max_test_points + 1)
+        num_train_points = np.random.randint(self.min_train_points, self.max_train_points + 1)
+        num_test_points = np.random.randint(self.min_test_points, self.max_test_points + 1)
         num_points = num_train_points + num_test_points
+        
+        randoms = np.random.randint(0,len(self.dataframe),self.batch_size)
+        ids = self.dataframe['id'].iloc[randoms].tolist()
+        year = self.dataframe['YR'].iloc[randoms].tolist()
+        df = self.dataframe[(self.dataframe['id'].isin(ids) | (self.dataframe['id_lag'].isin(ids)))]
 
         for i in range(self.batch_size):
-            # Sample inputs and outputs.
+        # Sample inputs and outputs.
             ##x = _rand(self.x_range, num_points)
-            s_ind = round(time.mktime(datetime.datetime(year=self.s_year, month=self.s_month, day=self.s_day, hour = 1).timetuple())/86400)
-            e_ind = round(time.mktime(datetime.datetime(year=self.e_year, month=self.e_month, day=self.e_day, hour = 1).timetuple())/86400)
-            s_ind = self.dataframe.index[self.dataframe['idx'] == s_ind].tolist()[0]
-            e_ind = self.dataframe.index[self.dataframe['idx'] == e_ind].tolist()[0]
+
+            #df = self.dataframe
+            
+            #hru08 = df['hru08'].iloc[rand_init]
+            #zone = df['zone'].iloc[rand_init]
+
+            #year = df['DOY'].iloc[randoms].tolist()
+            df_s = df[((df['id']==ids[i]) | (df['id_lag']==ids[i]))]
+            s_ind, e_ind = np.array([]), np.array([])
+
+            while (s_ind.size == 0) | (e_ind.size == 0):
+                rand = np.random.randint(0,len(df_s)-60)
+                DOY = df_s['DOY'].iloc[rand]
+                s_ind = df_s.index[(df_s['YR']==year[i]) & (df_s['DOY']==DOY)].values
+                e_ind = s_ind + 60
+  
             x_ind = _rand((s_ind, e_ind),num_points)
-            #x_ind = np.arange(s_ind,e_ind,1)
-            y = self.sample(x_ind)
-            #x = x_ind
+
+            y, y_t = self.sample(x_ind,df_s)
+
             x = np.divide(np.array(x_ind) - s_ind, e_ind - s_ind)
 
-
             # Determine indices for train and test set.
-            inds = np.random.permutation(len(x)) #(x.shape[0])
+            inds = np.random.permutation(len(x))
             inds_train = sorted(inds[:num_train_points])
             inds_test = sorted(inds[num_train_points:num_points])
-            
-            #pdb.set_trace()
-            #print("length of x_ind: " + str(len(x_ind)))
-            #print("length of x: " + str(len(x)))
-            #print("length of y: " + str(len(y)))
 
             """# Record to task.
             task['x'].append(sorted(x))
             task['y'].append(y[np.argsort(x)])
             task['x_context'].append(x[inds_train])#(np.array(x)[inds_train])
             task['y_context'].append(y[inds_train])
-            task['x_target'].append(x[inds_test])#(np.array(x)[inds_test])
+            task['x_target'].append(x[inds_test])#(np.array(x)[inds_test])a
             task['y_target'].append(y[inds_test])"""
 
             # Record to task.
-            #task['x'].append(np.concatenate((sorted(x),y[0][np.argsort(x)]),axis=0).reshape(len(x),2))
-            #task['x'].append(np.vstack((sorted(x),y[0][np.argsort(x)])))
             
-            task['x_0'].append(sorted(x))
-            task['x_1'].append(y[0][np.argsort(x)])
-            task['y'].append(y[1][np.argsort(x)])
-            #task['x_context'].append(np.concatenate((x[inds_train],y[0][inds_train]),axis=0).reshape(len(inds_train),2))
-            #task['y_context'].append(y[1][inds_train])
+            task['x'].append(sorted(x))
+            task['x_context'].append(x[inds_train])
+            task['x_target'].append(x[inds_test])
 
-            task['x_context_0'].append(x[inds_train])
-            task['x_context_1'].append(y[0][inds_train])
-            task['y_context'].append(y[1][inds_train])
+            y_aux, y_context_aux, y_target_aux = [], [], []
+            
+            for i in range(len(y)):
+                y_aux.append(y[i][np.argsort(x)])
+                y_context_aux.append(y[i][inds_train])
+            
+            for i in range(len(y_t)):
+                y_target_aux.append(y_t[i][inds_test])
+            
+            task['y'].append(np.stack(y_aux,axis=1).tolist())
+            task['y_context'].append(np.stack(y_context_aux,axis=1).tolist())
+            task['y_target'].append(np.stack(y_target_aux,axis=1).tolist())
 
-            task['x_target_0'].append(x[inds_test])
-            task['x_target_1'].append(y[0][inds_test])
-            #task['x_target'].append(np.concatenate((x[inds_test],y[0][inds_test]),axis=0).reshape(len(inds_test),2))
-            task['y_target'].append(y[1][inds_test])
-
-            #plt.plot(x,y[0])
-            #plt.plot(sorted(x[inds_train]),y[1][np.argsort(x[inds_train])],'o')
-            #plt.plot(np.arange(1,len(x)+1),y[0],'o'))
-            #plt.show()
+            #task['y'].append(y[0][np.argsort(x)])
+            #task['y_context'].append(y[0][inds_train])
+            #task['y_target'].append(y[0][inds_test])
 
         # Stack batch and convert to PyTorch.
         task = {k: torch.tensor(_uprank(np.stack(v, axis=0)),
                                 dtype=torch.float32).to(device)
                 for k, v in task.items()}
-
-        task['x'] = torch.cat([task['x_0'],task['x_1']],dim=2)
-        task['x_context'] = torch.cat([task['x_context_0'],task['x_context_1']],dim=2)
-        task['x_target'] = torch.cat([task['x_target_0'],task['x_target_1']],dim=2)
 
         return task
 
@@ -196,9 +199,6 @@ class HydroGenerator(DataGenerator):
     """ Generate samples from hydrological data"""
     
     def __init__(self,
-                #filepath = r'/content/gdrive/My Drive/MResProject/data/camels/basin_timeseries_v1p2_modelOutput_maurer/model_output_maurer/model_output/flow_timeseries/maurer/01/01013500_05_model_output.txt',
-                #filepath = r'c:\\Users\\marcg\\Google Drive\\MResProject//data/camels/basin_timeseries_v1p2_modelOutput_maurer/model_output_maurer/model_output/flow_timeseries/maurer/01/01013500_05_model_output.txt',
-                #filepath = r'/mnt/c/Users/marcg/Google Drive/MResProject//data/camels/basin_timeseries_v1p2_modelOutput_maurer/model_output_maurer/model_output/flow_timeseries/maurer/01/01013500_05_model_output.txt',
                 dataframe,
                 s_year  = 2000,
                 s_month = 6,
@@ -206,9 +206,10 @@ class HydroGenerator(DataGenerator):
                 e_year = 2000,
                 e_month = 6,
                 e_day = 30,
+                channels_c = ['OBS_RUN'],
+                channels_t = ['OBS_RUN'],
                 **kw_args):     
 
-        #self.filepath = filepath
         self.dataframe = dataframe
         self.s_year = s_year
         self.s_month = s_month
@@ -216,34 +217,13 @@ class HydroGenerator(DataGenerator):
         self.e_year = e_year
         self.e_month = e_month
         self.e_day = e_day
+        self.channels_c = channels_c
+        self.channels_t = channels_t
         DataGenerator.__init__(self,**kw_args)
-
-    def sample(self,x):
-        #df = pd.read_table(self.filepath, sep="\s+")
-        #df['idx'] = df['YR']*10000 + df['MNTH']*100 + df['DY']
-        #df['idx'] = df.apply(date_to_int,axis=1)
-        #df['idx'] = time.mktime(datetime.datetime(year=df['YR'], month=df['MNTH'], day=df['DY']).timetuple())/86400
-        #ind_start = df.index[(df['YR'] == self.s_year) & (df['MNTH'] == self.s_month) & (df['DY'] == self.s_day)].tolist()
-        #ind_end = df.index[(df['YR'] == self.e_year) & (df['MNTH'] == self.e_month) & (df['DY'] == self.e_day)].tolist()
-        #return np.asarray(df['OBS_RUN'][ind_start[0]:ind_end[0]].tolist())
-        x0 = np.array(self.dataframe['PRCP'][x])
-        x1 = np.array(self.dataframe['OBS_RUN'][x])
-        
-        #x0 = np.array(self.dataframe['PRCP'][self.dataframe['idx'].isin(x)])
-        #x1 = np.array(self.dataframe['OBS_RUN'][self.dataframe['idx'].isin(x)])
-        
-        #pdb.set_trace()
-        return np.vstack([x0,x1])
-        #return np.asarray(self.dataframe['OBS_RUN'][self.dataframe['idx'].isin(x)].tolist())
-        #pdb.set_trace()
-
-    """
-    def range(self, data, range):
-        values = np.linspace(range[0],range[1],range[1]-range[0]+1)
-        data['idx'] = 
-        return values
-    """
-
+    
+    def sample(self,x,df):
+        return np.vstack(tuple(df[key][x] for key in self.channels_c)), np.vstack(tuple(df[key][x] for key in self.channels_t)) 
+    
 class SawtoothGenerator(DataGenerator):
 
     """Generate samples from a random sawtooth.

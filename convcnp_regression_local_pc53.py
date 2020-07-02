@@ -26,20 +26,31 @@ def to_numpy(x):
     """Convert a PyTorch tensor to NumPy."""
     return x.squeeze().detach().cpu().numpy()   
 
-filepath = r'../data/camels/basin_timeseries_v1p2_modelOutput_maurer/model_output_maurer/model_output/flow_timeseries/maurer/01/01013500_05_model_output.txt'
-df = pd.read_table(filepath, sep="\s+")
+start_time = time.time()
+filepath = r'../data/camels_processed/maurer_model_output_complete.csv'
+df = pd.read_csv(filepath)
+elapsed = time.time() - start_time
+print("CSV imported -- time: %.3f" %  (elapsed))
 
 s_year = 2000
 s_month = 6
 s_day = 1
 e_year = 2000
-e_month = 10
+e_month = 7
 e_day = 30
 
-def date_to_int(row):
-    return int(time.mktime(datetime.datetime(year=int(row['YR']), month=int(row['MNTH']), day=int(row['DY'])).timetuple())/86400)
+min_train_points = 10
+min_test_points = 10
+max_train_points = 20
+max_test_points = 20
 
-df['idx'] = df.apply(date_to_int,axis=1)
+#channel_names = ['OBS_RUN','PRCP']
+
+#s_date = str(s_year)  + '-' + str(s_month).zfill(2) + '-' + str(s_day).zfill(2)
+#e_date = str(e_year)  + '-' + str(e_month).zfill(2) + '-' + str(e_day).zfill(2)
+#df = df.iloc[s_date:e_date,:]
+
+df = df[(df['YR'] >= s_year) & (df['MNTH'] >= s_month) & (df['YR'] <= e_year) & (df['MNTH'] <= e_month) & (df['hru02'] == 'hru_01')]
 
 #kernel = stheno.Matern52().stretch(0.25)
 #gen = convcnp.data.GPGenerator(kernel=kernel)
@@ -51,23 +62,29 @@ gen = convcnp.data_hydro_2.HydroGenerator(s_year=s_year,
                                             e_month=e_month,
                                             e_day=e_day,
                                             dataframe=df,
-                                            max_train_points=50,
-                                            max_test_points=50)
+                                            batch_size = 16,
+                                            num_tasks = 256,
+                                            channels_c = ['OBS_RUN'],
+                                            channels_t = ['OBS_RUN'],
+                                            min_train_points=min_train_points,
+                                            min_test_points=min_test_points,
+                                            max_train_points=max_train_points,
+                                            max_test_points=max_test_points)
 
 #x_test = np.linspace(2000*365 + 30*6 + 1, 2000*365 + 30*6 + 30, 300)
-x_test = np.vstack([np.linspace(0,1,30),np.linspace(0,1,30)])
+x_test = np.vstack([np.linspace(0,1,30)])
 #x_test = np.linspace(-2,2,300)
 #gp = stheno.GP(kernel)
 
 def plot_task(task, idx, legend):
-    #x_context, y_context = to_numpy(task['x_context'][idx]), to_numpy(task['y_context'][idx])
-    #x_target, y_target = to_numpy(task['x_target'][idx]), to_numpy(task['y_target'][idx])
-    x_context, y_context = to_numpy(task['x_context'][idx][:,0]), to_numpy(task['y_context'][idx])
-    x_target, y_target = to_numpy(task['x_target'][idx][:,0]), to_numpy(task['y_target'][idx])
+    x_context, y_context = to_numpy(task['x_context'][idx]), to_numpy(task['y_context'][idx][:,0])
+    x_target, y_target = to_numpy(task['x_target'][idx]), to_numpy(task['y_target'][idx][:,0])#
       
     # Plot context and target sets.
-    plt.scatter(x_context, y_context, label='Context Set', color='black')
-    plt.scatter(x_target, y_target, label = 'Target Set', color='blue')
+    plt.scatter(x_context, y_context, label='Context Set (rain)', color='black', marker='x')
+    #plt.scatter(x_context, y_context[:,1], label='Context Set (flow)', color='black', marker='o')
+    plt.scatter(x_target, y_target, label = 'Target Set (rain)', color='blue', marker='x')
+    #plt.scatter(x_target, y_target, label = 'Target Set (flow)', color='blue', marker='o')
     #obs_x = (df['idx'][df['idx'].isin(np.arange(s_ind,e_ind+1,1))]-s_ind)/(e_ind-s_ind)
     #obs_y = df['OBS_RUN'][df['idx'].isin(np.arange(s_ind,e_ind+1,1))]
     #plt.plot(obs_x,obs_y)
@@ -89,9 +106,9 @@ fig = plt.figure(figsize=(24, 5))
 for i in range(3):
     plt.subplot(1, 3, i + 1)
     plot_task(task, i, legend=i==2)
-plt.show()
+#plt.show()
 
-def compute_dists_1D(x, y):
+def compute_dists(x, y):
     """Fast computation of pair-wise distances for the 1d case.
 
     Args:
@@ -105,7 +122,7 @@ def compute_dists_1D(x, y):
     return (x - y.permute(0, 2, 1)) ** 2
 
 
-def compute_dists(x_context, x_target):
+def compute_dists_2D(x_context, x_target):
         '''
         Compute dists for psi for 2D
         '''
@@ -123,10 +140,10 @@ class ConvDeepSet(nn.Module):
         init_length_scale (float): Initial value for the length scale.
     """
 
-    def __init__(self, out_channels, init_length_scale):
+    def __init__(self, in_channels, out_channels, init_length_scale):
         super(ConvDeepSet, self).__init__()
         self.out_channels = out_channels
-        self.in_channels = 2
+        self.in_channels = in_channels + 1
         self.g = self.build_weight_model()
         self.sigma = nn.Parameter(np.log(init_length_scale) *
                                   torch.ones(self.in_channels), requires_grad=True)
@@ -176,7 +193,7 @@ class ConvDeepSet(nn.Module):
         # Compute shapes.
         batch_size = x.shape[0]
         n_in = x.shape[1]
-        n_out = t.shape[1]
+        n_out = t.lshape[1]
         
         #pdb.set_trace()
 
@@ -316,19 +333,20 @@ class ConvCNP(nn.Module):
             Used to discretize function.
     """
 
-    def __init__(self, rho, points_per_unit):
+    def __init__(self, in_channels, rho, points_per_unit):
         super(ConvCNP, self).__init__()
         self.activation = nn.Sigmoid()
         self.sigma_fn = nn.Softplus()
         self.rho = rho
         self.multiplier = 2 ** self.rho.num_halving_layers
+        self.in_channels = in_channels
 
         # Compute initialisation.
         self.points_per_unit = points_per_unit
         init_length_scale = 2.0 / self.points_per_unit
         
         # Instantiate encoder
-        self.encoder = ConvDeepSet(out_channels=self.rho.in_channels,
+        self.encoder = ConvDeepSet(in_channels, out_channels=self.rho.in_channels,
                                    init_length_scale=init_length_scale)
         
         # Instantiate mean and standard deviation layers
@@ -349,25 +367,22 @@ class ConvCNP(nn.Module):
             tuple[tensor]: Means and standard deviations of shape (batch_out, channels_out).
         """
         # Determine the grid on which to evaluate functional representation.
-        x_min_0 = min(torch.min(x[:,:,0]).cpu().numpy(),
-                    torch.min(x_out[:,:,0]).cpu().numpy(), -2.) - 0.1
-        x_max_0 = max(torch.max(x[:,:,0]).cpu().numpy(),
-                    torch.max(x_out[:,:,0]).cpu().numpy(), 2.) + 0.1
-        num_points = int(to_multiple(self.points_per_unit * (x_max_0 - x_min_0),
+        x_min = min(torch.min(x[:,:,0]).cpu().numpy(),
+                    torch.min(x_out[:,:,0]).cpu().numpy(), 0.) - 0.1
+        x_max = max(torch.max(x[:,:,0]).cpu().numpy(),
+                    torch.max(x_out[:,:,0]).cpu().numpy(), 1.) + 0.1
+        num_points = int(to_multiple(self.points_per_unit * (x_max - x_min),
                                      self.multiplier))
         
-        x_min_1 = min(torch.min(x[:,:,1]).cpu().numpy(),
-                    torch.min(x_out[:,:,1]).cpu().numpy(), -2.) - 0.1
+        """x_min_1 = min(torch.min(x[:,:,1]).cpu().numpy(),
+                    torch.min(x_out[:,:,1]).cpu().numpy(), 0.) - 0.1
         x_max_1 = max(torch.max(x[:,:,1]).cpu().numpy(),
-                    torch.max(x_out[:,:,1]).cpu().numpy(), 2.) + 0.1
-        """num_points_1 = int(to_multiple(self.points_per_unit * (x_max_1 - x_min_1),
+                    torch.max(x_out[:,:,1]).cpu().numpy(), 1.) + 0.1
+        num_points_1 = int(to_multiple(self.points_per_unit * (x_max_1 - x_min_1),
                                      self.multiplier))"""
 
-        x_grid_0 = torch.linspace(x_min_0, x_max_0, num_points).to(device)
-        x_grid_1 = torch.linspace(x_min_1, x_max_1, num_points).to(device)
-        x_grid_0 = x_grid_0[None, :, None].repeat(x.shape[0], 1, 1)
-        x_grid_1 = x_grid_1[None, :, None].repeat(x.shape[0], 1, 1)
-        x_grid = torch.cat([x_grid_0,x_grid_1],dim=2)
+        x_grid = torch.linspace(x_min, x_max, num_points).to(device)
+        x_grid = x_grid[None, :, None].repeat(x.shape[0], 1, 1)
 
         # Apply first layer and conv net. Take care to put the axis ranging
         # over the data last.
@@ -394,16 +409,14 @@ class ConvCNP(nn.Module):
                        for param in self.parameters()])
     
 
-model = ConvCNP(rho=UNet(), points_per_unit=64)
+model = ConvCNP(in_channels = len(channel_names), rho=UNet(), points_per_unit=64)
 model.to(device)
 
-import pdb
 def train(data, model, opt):
     """Perform a training epoch."""
     ravg = RunningAverage()
     model.train()
     for step, task in enumerate(data):
-        #pdb.set_trace()
         y_mean, y_std = model(task['x_context'], task['y_context'], task['x_target'])
         obj = -gaussian_logpdf(task['y_target'], y_mean, y_std, 'batched_mean')
         obj.backward()
@@ -414,10 +427,7 @@ def train(data, model, opt):
 
 
 # Create a fixed set of outputs to predict at when plotting.
-#x_test = torch.linspace(-2., 2., 200)[None, :, None].to(device)
-x_test_0 = torch.linspace(0., 1., 30)[None, :, None].to(device)
-x_test_1 = torch.linspace(0., 1., 30)[None, :, None].to(device)
-x_test = torch.cat([x_test_0,x_test_1],dim=2)
+x_test = torch.linspace(0., 1.,100)[None, :, None].to(device)
 
 
 def plot_model_task(model, task, idx, legend):
@@ -429,9 +439,9 @@ def plot_model_task(model, task, idx, legend):
         y_mean, y_std = model(task['x_context'], task['y_context'], x_test.repeat(num_functions, 1, 1))
     
     # Plot the task and the model predictions.
-    x_context, y_context = to_numpy(task['x_context'][idx][:,0]), to_numpy(task['y_context'][idx])
-    x_target, y_target = to_numpy(task['x_target'][idx][:,0]), to_numpy(task['y_target'][idx])
-    y_mean, y_std = to_numpy(y_mean[idx]), to_numpy(y_std[idx])
+    x_context, y_context = to_numpy(task['x_context'][idx]), to_numpy(task['y_context'][idx][:,0])
+    x_target, y_target = to_numpy(task['x_target'][idx]), to_numpy(task['y_target'][idx][:,0])
+    y_mean, y_std = to_numpy(y_mean[idx][:,0]), to_numpy(y_std[idx][:,0])
     
     # Plot context and target sets.
     plt.scatter(x_context, y_context, label='Context Set', color='black')
@@ -446,7 +456,6 @@ def plot_model_task(model, task, idx, legend):
     if legend:
         plt.legend()
 
-
 # Some training hyper-parameters:
 LEARNING_RATE = 1e-3
 NUM_EPOCHS = 100
@@ -458,26 +467,51 @@ opt = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 # Run the training loop.
 for epoch in range(NUM_EPOCHS):
 
-    #print ('MGM Epoch %s: NLL %.3f' % (epoch, train_obj))  
     # Compute training objective.
+    start_time = time.time()
     train_obj = train(gen, model, opt)
-
+    elapsed = time.time() - start_time
+    
     # Plot model behaviour every now and again.
+    #if epoch == 0:
+    #    print('Epoch %s: NLL %.3f -- time: %.3f' % (epoch, train_obj, elapsed))
     if epoch % PLOT_FREQ == 0:
-        print('Epoch %s: NLL %.3f' % (epoch, train_obj))
+        print('Epoch %s: NLL %.3f -- time: %.3f' % (epoch, train_obj, elapsed))
         task = gen.generate_task()
         fig = plt.figure(figsize=(24, 5))
         for i in range(3):
             plt.subplot(1, 3, i + 1)
             plot_model_task(model, task, idx=i, legend=i==2)
-        plt.show()
-    else:
-        print('Epoch %s: NLL %.3f' % (epoch, train_obj))
+        #plt.show()
 
+        PATH = r'C:\Users\marcg\Google Drive\MResProject\saved_models\1D_19900601_20000730_epoch%s.pt' % (str(epoch).zfill(2))
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': opt.state_dict(),
+            #'loss': loss,
+            }, PATH)
+
+    else:
+        print('Epoch %s: NLL %.3f -- time: %.3f' % (epoch, train_obj, elapsed))
+
+PATH = r'C:\Users\marcg\Google Drive\MResProject\saved_models\1D_19900601_20000730.pt'
+torch.save(model.state_dict(),PATH)
 
 # Instantiate data generator for testing.
 NUM_TEST_TASKS = 2048
-gen_test = convcnp.data.GPGenerator(kernel=kernel, num_tasks=NUM_TEST_TASKS)
+gen_test = convcnp.data_hydro_2.HydroGenerator(s_year=s_year,
+                                            s_month=s_month,
+                                            s_day=s_day,
+                                            e_year=e_year,
+                                            e_month=e_month,
+                                            e_day=e_day,
+                                            dataframe=df,
+                                            min_train_points = min_train_points,
+                                            min_test_points = min_test_points,
+                                            max_train_points = max_train_points,
+                                            max_test_points = max_test_points,
+                                            num_tasks=NUM_TEST_TASKS)
 
 # Compute average task log-likelihood.
 ravg = RunningAverage()

@@ -345,9 +345,9 @@ class ConvCNP(nn.Module):
         """
         # Determine the grid on which to evaluate functional representation.
         x_min = min(torch.min(x).cpu().numpy(),
-                    torch.min(x_out).cpu().numpy(), -2.) - 0.1
+                    torch.min(x_out).cpu().numpy(), 0.) - 0.1
         x_max = max(torch.max(x).cpu().numpy(),
-                    torch.max(x_out).cpu().numpy(), 2.) + 0.1
+                    torch.max(x_out).cpu().numpy(), 1.) + 0.1
         num_points = int(to_multiple(self.points_per_unit * (x_max - x_min),
                                      self.multiplier))
         x_grid = torch.linspace(x_min, x_max, num_points).to(device)

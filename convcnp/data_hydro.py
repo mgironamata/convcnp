@@ -2,9 +2,9 @@ import abc
 
 import numpy as np
 import pandas as pd
-import stheno
 import torch
 import os
+#import stheno
 import pdb
 import random
 import time
@@ -12,14 +12,12 @@ import datetime
 
 from .utils import device
 
-__all__ = ['GPGenerator', 'SawtoothGenerator']
+__all__ = ['GPGenerator', 'SawtoothGenerator', 'HydroGenerator']
 
 
 def _rand(val_range, *shape):
     lower, upper = val_range
-    #my_set = set(lower + np.round(np.random.rand(*shape) * (upper - lower),0))
     return random.sample(range(int(lower),int(upper)),*shape)
-    #return list(set(lower + np.round(np.random.rand(*shape) * (upper - lower),0)))
     #return lower + np.random.rand(*shape) * (upper - lower)
 
 def _uprank(a):
@@ -32,8 +30,8 @@ def _uprank(a):
     else:
         return ValueError(f'Incorrect rank {len(a.shape)}.')
 
-def date_to_int(row):
-    return int(time.mktime(datetime.datetime(year=int(row['YR']), month=int(row['MNTH']), day=int(row['DY'])).timetuple())/86400)
+"""def date_to_int(row):
+    return int(time.mktime(datetime.datetime(year=int(row['YR']), month=int(row['MNTH']), day=int(row['DY'])).timetuple())/86400)"""
 
 
 class LambdaIterator:
@@ -79,8 +77,8 @@ class DataGenerator(metaclass=abc.ABCMeta):
                  batch_size=16,
                  num_tasks=256,
                  x_range=(-2, 2),
-                 max_train_points=50,
-                 max_test_points=50):
+                 max_train_points=5,
+                 max_test_points=5):
         self.batch_size = batch_size
         self.num_tasks = num_tasks
         self.x_range = x_range
@@ -121,11 +119,27 @@ class DataGenerator(metaclass=abc.ABCMeta):
         for i in range(self.batch_size):
             # Sample inputs and outputs.
             ##x = _rand(self.x_range, num_points)
-            s_ind = time.mktime(datetime.datetime(year=self.s_year, month=self.s_month, day=self.s_day).timetuple())/86400
-            e_ind = time.mktime(datetime.datetime(year=self.e_year, month=self.e_month, day=self.e_day).timetuple())/86400
+            df = self.dataframe
+            rand_init = np.random.randint(0,len(df))
+            #basin = df[rand_init,13]
+            #zone = df[rand_init,14]
+            basin = df['basin'].iloc[rand_init]
+            zone = df['zone'].iloc[rand_init]
+            
+            #s_ind = round(time.mktime(datetime.datetime(year=self.s_year, month=self.s_month, day=self.s_day, hour = 1).timetuple())/86400) 
+            #e_ind = round(time.mktime(datetime.datetime(year=self.e_year, month=self.e_month, day=self.e_day, hour = 1).timetuple())/86400)
+            s_ind = df.index[(df['YR']==self.s_year) & (df['MNTH']==self.s_month) & (df['DY']==self.s_day) & (df['basin']==basin) & (df['zone']==zone)].values
+            e_ind = df.index[(df['YR']==self.e_year) & (df['MNTH']==self.e_month) & (df['DY']==self.e_day) & (df['basin']==basin) & (df['zone']==zone)].values
+            #s_ind = np.where((df[:,1]==self.s_year) & (df[:,2]==self.s_month) & (df[:,3]==self.s_day) & (df[:,13]==basin) & (df[:,14]==zone))[0]
+            #e_ind = np.where((df[:,1]==self.e_year) & (df[:,2]==self.e_month) & (df[:,3]==self.e_day) & (df[:,13]==basin) & (df[:,14]==zone))[0]
+            
+            #s_ind = self.dataframe.index[self.dataframe['idx'] == s_ind].tolist()[0]
+            #e_ind = self.dataframe.index[self.dataframe['idx'] == e_ind].tolist()[0]
             x_ind = _rand((s_ind, e_ind),num_points)
+            #x_ind = np.arange(s_ind,e_ind,1)
             y = self.sample(x_ind)
-            x = np.array(x_ind) - s_ind
+            #x = x_ind
+            x = np.divide(np.array(x_ind) - s_ind, e_ind - s_ind)
 
             # Determine indices for train and test set.
             inds = np.random.permutation(len(x))#(x.shape[0])
@@ -139,20 +153,11 @@ class DataGenerator(metaclass=abc.ABCMeta):
 
             # Record to task.
             task['x'].append(sorted(x))
-            task['y'].append(y[np.argsort(x)])
-            task['x_context'].append(x[inds_train])#(np.array(x)[inds_train])
-            task['y_context'].append(y[inds_train])
-            task['x_target'].append(x[inds_test])#(np.array(x)[inds_test])
-            task['y_target'].append(y[inds_test])
-
-
-            """# Record to task.
-            task['x'].append(np.concatenate((sorted(x),y[0][np.argsort(x)]),axis=0).reshape(len(x),2))
-            task['y'].append(y[1][np.argsort(x)])
-            task['x_context'].append(np.concatenate((x[inds_train],y[0][inds_train]),axis=0).reshape(len(inds_train),2))
-            task['y_context'].append(y[1][inds_train])
-            task['x_target'].append(np.concatenate((x[inds_test],y[0][inds_test]),axis=0).reshape(len(inds_test),2))
-            task['y_target'].append(y[1][inds_test])"""
+            task['y'].append(y[np.argsort(x)].tolist())
+            task['x_context'].append(x[inds_train].tolist())#(np.array(x)[inds_train])
+            task['y_context'].append(y[inds_train].tolist())
+            task['x_target'].append(x[inds_test].tolist())#(np.array(x)[inds_test])
+            task['y_target'].append(y[inds_test].tolist())
 
         # Stack batch and convert to PyTorch.
         task = {k: torch.tensor(_uprank(np.stack(v, axis=0)),
@@ -169,16 +174,20 @@ class HydroGenerator(DataGenerator):
     """ Generate samples from hydrological data"""
     
     def __init__(self,
-                filepath = r'/content/gdrive/My Drive/MResProject/data/camels/basin_timeseries_v1p2_modelOutput_maurer/model_output_maurer/model_output/flow_timeseries/maurer/01/01013500_05_model_output.txt',
+                #filepath = r'/content/gdrive/My Drive/MResProject/data/camels/basin_timeseries_v1p2_modelOutput_maurer/model_output_maurer/model_output/flow_timeseries/maurer/01/01013500_05_model_output.txt',
+                #filepath = r'c:\\Users\\marcg\\Google Drive\\MResProject//data/camels/basin_timeseries_v1p2_modelOutput_maurer/model_output_maurer/model_output/flow_timeseries/maurer/01/01013500_05_model_output.txt',
+                #filepath = r'/mnt/c/Users/marcg/Google Drive/MResProject//data/camels/basin_timeseries_v1p2_modelOutput_maurer/model_output_maurer/model_output/flow_timeseries/maurer/01/01013500_05_model_output.txt',
+                dataframe,
                 s_year  = 2000,
-                s_month = 1,
+                s_month = 6,
                 s_day = 1,
                 e_year = 2000,
-                e_month = 12,
+                e_month = 6,
                 e_day = 30,
                 **kw_args):     
-                    
-        self.filepath = filepath
+
+        #self.filepath = filepath
+        self.dataframe = dataframe
         self.s_year = s_year
         self.s_month = s_month
         self.s_day = s_day
@@ -188,22 +197,23 @@ class HydroGenerator(DataGenerator):
         DataGenerator.__init__(self,**kw_args)
 
     def sample(self,x):
-        df = pd.read_table(self.filepath, sep="\s+")
+        #df = pd.read_table(self.filepath, sep="\s+")
         #df['idx'] = df['YR']*10000 + df['MNTH']*100 + df['DY']
-        df['idx'] = df.apply(date_to_int,axis=1)
+        #df['idx'] = df.apply(date_to_int,axis=1)
         #df['idx'] = time.mktime(datetime.datetime(year=df['YR'], month=df['MNTH'], day=df['DY']).timetuple())/86400
         #ind_start = df.index[(df['YR'] == self.s_year) & (df['MNTH'] == self.s_month) & (df['DY'] == self.s_day)].tolist()
         #ind_end = df.index[(df['YR'] == self.e_year) & (df['MNTH'] == self.e_month) & (df['DY'] == self.e_day)].tolist()
         #return np.asarray(df['OBS_RUN'][ind_start[0]:ind_end[0]].tolist())
-        return np.asarray(df['OBS_RUN'][df['idx'].isin(x)].tolist())
-        #return np.asarray(df['PRCP'][df['idx'].isin(x)].tolist()), np.asarray(df['OBS_RUN'][df['idx'].isin(x)].tolist())
+        #return self.dataframe[x,12]
+        return np.array(self.dataframe['OBS_RUN'][x])
+        #return np.asarray(self.dataframe['OBS_RUN'][self.dataframe['idx'].isin(x)].tolist())
+        #return np.asarray(self.dataframe['PRCP'][self.dataframe['idx'].isin self.dataframe['OBS_RUN'][self.dataframe['idx'].isin(x)].tolist())
     """
     def range(self, data, range):
         values = np.linspace(range[0],range[1],range[1]-range[0]+1)
         data['idx'] = 
         return values
     """
-
 
 
 class GPGenerator(DataGenerator):
@@ -216,8 +226,8 @@ class GPGenerator(DataGenerator):
             Defaults to an EQ kernel.
     """
 
-    def __init__(self, kernel=stheno.EQ(), **kw_args):
-        self.gp = stheno.GP(kernel, graph=stheno.Graph())
+    def __init__(self):#, kernel=stheno.EQ(), **kw_args):
+        self.gp = 0 #stheno.GP(kernel, graph=stheno.Graph())
         DataGenerator.__init__(self, **kw_args)
 
     def sample(self, x):
@@ -225,6 +235,7 @@ class GPGenerator(DataGenerator):
 
 
 class SawtoothGenerator(DataGenerator):
+
     """Generate samples from a random sawtooth.
 
     Further takes in keyword arguments for :class:`.data.DataGenerator`. The
@@ -250,8 +261,8 @@ class SawtoothGenerator(DataGenerator):
         self.shift_dist = shift_dist
         self.trunc_dist = trunc_dist
         DataGenerator.__init__(self,
-                               max_train_points=20,
-                               max_test_points=20,
+                               max_train_points=max_train_points,
+                               max_test_points=max_test_points,
                                **kw_args)
 
     def sample(self, x):
