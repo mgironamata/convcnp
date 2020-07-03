@@ -116,12 +116,6 @@ class HydroGenerator(DataGenerator):
     def __init__(self,
                 dataframe,
                 df_att,
-                s_year = 2000,
-                s_month = 6,
-                s_day = 1,
-                e_year = 2000,
-                e_month = 6,
-                e_day = 30,
                 channels_c = ['OBS_RUN'],
                 channels_t = ['OBS_RUN'],
                 channels_att = ['gauge_id'],
@@ -130,18 +124,11 @@ class HydroGenerator(DataGenerator):
                 target_mask = [0,1,1,1],
                 extrapolate = True,
                 timeslice = 60,
-                test_time = False,
                 dropout_rate = 0,
                 **kw_args):     
 
         self.dataframe = dataframe
         self.df_att = df_att
-        self.s_year = s_year
-        self.s_month = s_month
-        self.s_day = s_day
-        self.e_year = e_year
-        self.e_month = e_month
-        self.e_day = e_day
         self.channels_c = channels_c
         self.channels_t = channels_t
         self.channels_att = channels_att
@@ -150,7 +137,6 @@ class HydroGenerator(DataGenerator):
         self.target_mask = target_mask
         self.extrapolate = extrapolate
         self.timeslice = timeslice
-        self.test_time = test_time
         self.dropout_rate = dropout_rate
         DataGenerator.__init__(self,**kw_args)
     
@@ -182,55 +168,27 @@ class HydroGenerator(DataGenerator):
         # Generate a random integer for each element in the bacth 
         randoms = np.random.randint(0,len(self.dataframe)-self.timeslice,self.batch_size)
         ids, year, hru08 = np.stack(self.dataframe[['id','YR','hru08']].iloc[randoms].values,axis=1).tolist()
-        #df = self.dataframe[(self.dataframe['id'].isin(ids) | (self.dataframe['id_lag'].isin(ids)))]
 
         for i in range(self.batch_size):
         # Sample inputs and outputs.
             #x = _rand(self.x_range, num_points)
-            df = self.dataframe.iloc[randoms[i]:randoms[i]+self.timeslice]
-            df_s = df.copy()
-            #df_s = df[((df['id']==ids[i]) | (df['id_lag']==ids[i]))].copy()
-            #df_s.drop_duplicates(inplace=True)
-            #df_s.reset_index(drop=True, inplace=True)
-            #df_s = df[((df['YR']==year[i]) | (df['YR']==year[i]+1)) & (df['hru08']==basin[i])]
-            #s_ind, e_ind = np.array([]), np.array([])
-            
-            #pdb.set_trace()
-            s_ind = randoms[i]
-            e_ind = randoms[i] + self.timeslice
-
-            """while (s_ind.size == 0) | (e_ind.size == 0):
-                rand = None
-                while rand == None:
-                    if len(df_s)>self.timeslice:
-                        rand = np.random.randint(0,len(df_s)-self.timeslice)
-                    
-                DOY = df_s['DOY'].iloc[rand]
-                s_ind = df_s.index[(df_s['YR']==year[i]) & (df_s['DOY']==DOY)].values
-                e_ind = s_ind + self.timeslice
-
-            if len(s_ind) + len(e_ind) > 2:
-                pdb.set_trace()"""
-
+            s_ind, e_ind = randoms[i], randoms[i] + self.timeslice
+            df = self.dataframe.iloc[s_ind:e_ind].copy()
             x_ind = _rand((s_ind, e_ind),num_points)
             
             if self.extrapolate == True:
                 x_ind = sorted(x_ind)
 
-            try:
-                y, y_t, y_t_val = self.sample(x_ind,df_s)
-            except:
-                pdb.set_trace()
-
+            y, y_t, y_t_val = self.sample(x_ind,df)
             y_att = self.sample_att(hru08[i])
 
             x = np.divide(np.array(x_ind) - s_ind, e_ind - s_ind)
 
             # Determine indices for train and test set.
-            if self.extrapolate == False:
-                inds = np.random.permutation(len(x))
-            elif self.extrapolate == True:
+            if self.extrapolate:
                 inds = np.arange(len(x))
+            else:
+                inds = np.random.permutation(len(x))                
             
             inds_train = sorted(inds[:num_train_points])
             inds_test = sorted(inds[num_train_points:num_points])
@@ -274,7 +232,7 @@ class HydroGenerator(DataGenerator):
         task = prep_task(task,
                             context_mask=self.context_mask,
                             target_mask=self.target_mask,
-                            dropout_rate=0,
+                            dropout_rate=self.dropout_rate,
                             embedding=True,
                             observe_at_target=True)
 
@@ -300,11 +258,21 @@ class HydroGenerator(DataGenerator):
         num_test_points = np.random.randint(self.min_test_points, self.max_test_points + 1)
         num_points = num_train_points + num_test_points
         
-        ids = self.dataframe['id'][(self.dataframe['hru08']==basin)&(self.dataframe['YR']==year)].unique()[0]
-        df = self.dataframe[(self.dataframe['id']==ids) | (self.dataframe['id_lag']==ids)]
-        #print("Length of df: ", len(df))
+        s_ind, e_ind = self.dataframe.index[(self.dataframe['hru08']==basin)&(self.dataframe['YR']==year)][[0,-1]]
+        s_ind_b, e_ind_b = self.dataframe.index[self.dataframe['hru08']==basin][[0, -1]]
+        
+        if s_ind - s_ind_b > self.timeslice: 
+            s_ind = s_ind - self.timeslice
+        elif s_ind - s_ind_b < self.timeslice:
+            s_ind = s_ind_b
+            print("WARNING")
+            
+        df = self.dataframe[s_ind:e_ind]
+
+        #ids = self.dataframe['id'][(self.dataframe['hru08']==basin)&(self.dataframe['YR']==year)].unique()[0]
+        ##df = self.dataframe[(self.dataframe['hru08']==basin)&(self.dataframe['YR']==year)]
+        #df = self.dataframe[(self.dataframe['id']==ids) | (self.dataframe['id_lag']==ids)]
         self.batch_size = len(df) - self.timeslice
-        #print("Length of batch", self.batch_size)
         hru08 = df['hru08'].unique()[0]
 
         for i in range(self.batch_size):
@@ -314,7 +282,6 @@ class HydroGenerator(DataGenerator):
             df_s = df_s.reset_index(drop=True)
             s_ind = i
             e_ind = self.timeslice + i
-            #print(s_ind,e_ind)
 
             x_ind = np.arange(s_ind, e_ind)
 
@@ -362,7 +329,7 @@ class HydroGenerator(DataGenerator):
             #task['y_context'].append(y[0][inds_train])
             #task['y_target'].append(y[0][inds_test])
             task['y_target_val'].append(y_t_val[0][inds_test])
-
+        
         # Stack batch and convert to PyTorch.
         task = {k: torch.tensor(_uprank(np.stack(v, axis=0)),
                                 dtype=torch.float32).to(device)
