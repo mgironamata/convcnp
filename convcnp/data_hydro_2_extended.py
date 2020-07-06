@@ -125,6 +125,7 @@ class HydroGenerator(DataGenerator):
                 extrapolate = True,
                 timeslice = 60,
                 dropout_rate = 0,
+                concat_attributes = True,
                 **kw_args):     
 
         self.dataframe = dataframe
@@ -138,6 +139,7 @@ class HydroGenerator(DataGenerator):
         self.extrapolate = extrapolate
         self.timeslice = timeslice
         self.dropout_rate = dropout_rate
+        self.concat_attributes = concat_attributes
         DataGenerator.__init__(self,**kw_args)
     
     def sample(self,x,df):
@@ -226,8 +228,10 @@ class HydroGenerator(DataGenerator):
         task['y_att'] = task['y_att'].permute([0,2,1])
         task['y_att_context'] = task['y_att'] * torch.ones(task['x_context'].shape).to(device)
         task['y_att_target'] = task['y_att'] * torch.ones(task['x_target'].shape).to(device)
-        task['y_context'] = torch.cat([task['y_context'],task['y_att_context']],dim=2)
-        task['y_target'] = torch.cat([task['y_target'],task['y_att_target']],dim=2)
+        
+        if self.concat_attributes:
+            task['y_context'] = torch.cat([task['y_context'],task['y_att_context']],dim=2)
+            task['y_target'] = torch.cat([task['y_target'],task['y_att_target']],dim=2)
 
         task = prep_task(task,
                             context_mask=self.context_mask,
@@ -338,14 +342,17 @@ class HydroGenerator(DataGenerator):
         task['y_att'] = task['y_att'].permute([0,2,1])
         task['y_att_context'] = task['y_att'] * torch.ones(task['x_context'].shape).to(device)
         task['y_att_target'] = task['y_att'] * torch.ones(task['x_target'].shape).to(device)
-        task['y_context'] = torch.cat([task['y_context'],task['y_att_context']],dim=2)
-        task['y_target'] = torch.cat([task['y_target'],task['y_att_target']],dim=2)
+        
+        if self.concat_attributes:
+            task['y_context'] = torch.cat([task['y_context'],task['y_att_context']],dim=2)
+            task['y_target'] = torch.cat([task['y_target'],task['y_att_target']],dim=2)
 
         task = prep_task(task,
                             context_mask=self.context_mask,
                             target_mask=self.target_mask,
                             dropout_rate=self.dropout_rate,
                             embedding=True,
+                            concat_attributes=self.concat_attributes,
                             observe_at_target=True)
 
         return task
