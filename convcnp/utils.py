@@ -5,6 +5,7 @@ from torch.distributions.normal import Normal
 from torch.distributions.gamma import Gamma
 
 __all__ = ['device',
+           'to_numpy',
            'to_multiple',
            'BatchLinear',
            'init_layer_weights',
@@ -12,11 +13,15 @@ __all__ = ['device',
            'compute_dists',
            'pad_concat',
            'gaussian_logpdf',
-           'gamma_logpdf']
+           'gamma_logpdf',
+           'gamma_stats']
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 """Device perform computations on."""
 
+def to_numpy(x):
+    """Convert a PyTorch tensor to NumPy."""
+    return x.squeeze().detach().cpu().numpy()
 
 def to_multiple(x, multiple):
     """Convert `x` to the nearest above multiple.
@@ -175,7 +180,7 @@ def gaussian_logpdf(inputs, mean, sigma, reduction=None):
     else:
         raise RuntimeError(f'Unknown reduction "{reduction}".')
 
-def gamma_logpdf(inputs, mean, sigma, reduction=None):
+def gamma_logpdf(inputs, loc, scale, reduction=None):
     """Gaussian log-density.
 
     Args:
@@ -188,7 +193,7 @@ def gamma_logpdf(inputs, mean, sigma, reduction=None):
     Returns:
         tensor: Log-density.
     """
-    dist = Gamma(concentration=mean, rate=sigma)
+    dist = Gamma(concentration=loc, rate=scale)
     logp = dist.log_prob(inputs)
 
     if not reduction:
@@ -201,3 +206,8 @@ def gamma_logpdf(inputs, mean, sigma, reduction=None):
         return torch.mean(torch.sum(logp, 1))
     else:
         raise RuntimeError(f'Unknown reduction "{reduction}".')
+
+def gamma_stats(loc, scale):
+    g_mean = torch.distributions.gamma.Gamma(loc, scale).mean
+    g_std = torch.sqrt(torch.distributions.gamma.Gamma(loc, scale).variance)
+    return g_mean, g_std

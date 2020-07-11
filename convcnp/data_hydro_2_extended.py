@@ -265,7 +265,7 @@ class HydroGenerator(DataGenerator):
         s_ind, e_ind = self.dataframe.index[(self.dataframe['hru08']==basin)&(self.dataframe['YR']==year)][[0,-1]]
         s_ind_b, e_ind_b = self.dataframe.index[self.dataframe['hru08']==basin][[0, -1]]
         
-        if s_ind - s_ind_b > self.timeslice: 
+        if s_ind - s_ind_b > self.timeslice:
             s_ind = s_ind - self.timeslice
         elif s_ind - s_ind_b < self.timeslice:
             s_ind = s_ind_b

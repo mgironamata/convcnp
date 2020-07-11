@@ -7,5 +7,7 @@ from .data_365 import *
 from .experiment import *
 from .set_conv import *
 from .utils import *
+from .transformations import * 
 from .task_preprocessing import *
-
+from .convcnp_architectures import *
+from .plot_utils import *
