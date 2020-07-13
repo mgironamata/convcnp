@@ -9,12 +9,12 @@ __all__ = ['task_mask',
            'prep_task',
            ]
 
-def task_mask(task,context_mask,target_mask,concat_attributes=False):
+def task_mask(task,context_mask,target_mask,concat_static_features=False):
 
     batch_size = task['x_context'].shape[0]
     num_test_points = task['x_target'].shape[1]
     num_train_points = task['x_context'].shape[1]
-    if concat_attributes:
+    if concat_static_features:
         dim_s = task['y_att'].shape[2]
     else:
         dim_s = 0
@@ -50,10 +50,10 @@ def feature_identity(task):
 
     return task
 
-def prep_task(task,context_mask,target_mask,dropout_rate=0,embedding=False,observe_at_target=False,concat_attributes=False):
+def prep_task(task,context_mask,target_mask,dropout_rate=0,embedding=False,observe_at_target=False,concat_static_features=False):
     
     if embedding == True: 
-        task = task_mask(task,context_mask,target_mask,concat_attributes=concat_attributes)
+        task = task_mask(task,context_mask,target_mask,concat_static_features=concat_static_features)
         task = random_mask(task,dropout_rate)
         task = feature_identity(task)
 

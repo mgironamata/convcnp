@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.normal import Normal
 from torch.distributions.gamma import Gamma
+import pdb
 
 __all__ = ['device',
            'to_numpy',
@@ -168,7 +169,6 @@ def gaussian_logpdf(inputs, mean, sigma, reduction=None):
     """
     dist = Normal(loc=mean, scale=sigma)
     logp = dist.log_prob(inputs)
-
     if not reduction:
         return logp
     elif reduction == 'sum':
@@ -181,7 +181,7 @@ def gaussian_logpdf(inputs, mean, sigma, reduction=None):
         raise RuntimeError(f'Unknown reduction "{reduction}".')
 
 def gamma_logpdf(inputs, loc, scale, reduction=None):
-    """Gaussian log-density.
+    """Gamma log-density.
 
     Args:
         inputs (tensor): Inputs.

@@ -7,9 +7,37 @@ from convcnp.utils import (
     to_multiple,
 )
 
-__all__ = ['DeepSet','ConvDeepSet','FinalLayer','ConvCNP']
+__all__ = ['DeepSet','FeatureEmbedding','ConvDeepSet','FinalLayer','ConvCNP']
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+class FeatureEmbedding(nn.Module):
+    """Feature set embedding layer 
+    
+    Args:
+    
+    """
+
+    def __init__(self,in_channels,out_channels):
+        super(FeatureEmbedding, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.f = self.build_weight_model()
+
+    def build_weight_model(self):
+        model = nn.Sequential(
+            nn.Linear(self.in_channels, self.out_channels),
+            nn.ReLU(),
+            nn.Linear(self.out_channels,self.out_channels),
+            nn.ReLU(),
+            nn.Linear(self.out_channels,self.out_channels)
+        )
+        init_sequential_weights(model)
+        return model
+
+    def forward(self, y, a, b):
+        return self.f(y)
+
 
 class DeepSet(nn.Module):
     
@@ -73,6 +101,9 @@ class DeepSet(nn.Module):
         y_out = y_out * m
         y_out = torch.div(y_out.sum(2),m.sum(2))
         #replace empty sets with 0 values
+        
+        #print("Warning: empty set occurred") if y_out[y_out != y_out].shape[0] > 0 else pass
+        
         y_out[y_out != y_out] = 0
         
         # Shape: (batch, n_in, out_channels).
@@ -303,7 +334,7 @@ class ConvCNP(nn.Module):
             Used to discretize function.
     """
 
-    def __init__(self, in_channels, rho, points_per_unit, dynamic_feature_embedding=True,static_feature_embedding=True,dynamic_embedding_dims=5,static_embedding_dims=5,static_embedding_location="after_encoder",dynamic_feature_missing_data=True,static_feature_missing_data=True):
+    def __init__(self, in_channels, rho, points_per_unit, dynamic_feature_embedding=True,static_feature_embedding=True,dynamic_embedding_dims=5,static_embedding_dims=5,static_embedding_location="after_encoder",dynamic_feature_missing_data=True,static_feature_missing_data=True,static_embedding_in_channels=2):
         super(ConvCNP, self).__init__()
         self.activation = nn.Sigmoid()
         self.sigma_fn = nn.Softplus()
@@ -314,6 +345,7 @@ class ConvCNP(nn.Module):
         self.dynamic_embedding_dims = dynamic_embedding_dims
         self.dynamic_feature_missing_data = dynamic_feature_missing_data
 
+        self.static_embedding_in_channels = static_embedding_in_channels
         self.static_embedding_dims = static_embedding_dims
         self.static_feature_embedding = static_feature_embedding
         self.static_feature_missing_data = static_feature_missing_data
@@ -334,20 +366,21 @@ class ConvCNP(nn.Module):
         self.dynamic_embedder = DeepSet(self.pre_embedding_channels,self.in_channels)
         
         # Instantiate static feature embedder
-        self.static_embedder = DeepSet(self.pre_embedding_channels,self.static_embedding_dims)
-        
+        if static_feature_missing_data:
+            self.static_embedder = DeepSet(self.static_embedding_in_channels,self.static_embedding_dims)
+        else:
+            self.static_embedder = FeatureEmbedding(self.static_embedding_in_channels,self.static_embedding_dims)
+            
         # Instantiate encoder
         if self.static_embedding_location == "after_encoder":
-            encoder_out_channels = self.rho.in_channels-self.static_embedding_dims    
+            encoder_out_channels = self.rho.in_channels-self.static_embedding_dims 
         else:
             encoder_out_channels = self.rho.in_channels
             
         self.encoder = ConvDeepSet(in_channels=self.in_channels, out_channels=encoder_out_channels,
                                    init_length_scale=init_length_scale)
-        
-                
+                 
         # Instantiate mean and standard deviation layers
-
         if self.static_embedding_location == "after_rho":
             final_layer_in_channels = self.rho.out_channels+self.static_embedding_dims
         else:
@@ -380,7 +413,6 @@ class ConvCNP(nn.Module):
         x_grid = torch.linspace(x_min, x_max, num_points).to(device)
         x_grid = x_grid[None, :, None].repeat(x.shape[0], 1, 1)
         
-        #pdb.set_trace()
         # Apply first layer and conv net. Take care to put the axis ranging
         # over the data last.
         if self.dynamic_feature_embedding:

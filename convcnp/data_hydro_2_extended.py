@@ -125,7 +125,7 @@ class HydroGenerator(DataGenerator):
                 extrapolate = True,
                 timeslice = 60,
                 dropout_rate = 0,
-                concat_attributes = True,
+                concat_static_features = True,
                 **kw_args):     
 
         self.dataframe = dataframe
@@ -139,7 +139,7 @@ class HydroGenerator(DataGenerator):
         self.extrapolate = extrapolate
         self.timeslice = timeslice
         self.dropout_rate = dropout_rate
-        self.concat_attributes = concat_attributes
+        self.concat_static_features = concat_static_features
         DataGenerator.__init__(self,**kw_args)
     
     def sample(self,x,df):
@@ -229,7 +229,7 @@ class HydroGenerator(DataGenerator):
         task['y_att_context'] = task['y_att'] * torch.ones(task['x_context'].shape).to(device)
         task['y_att_target'] = task['y_att'] * torch.ones(task['x_target'].shape).to(device)
         
-        if self.concat_attributes:
+        if self.concat_static_features:
             task['y_context'] = torch.cat([task['y_context'],task['y_att_context']],dim=2)
             task['y_target'] = torch.cat([task['y_target'],task['y_att_target']],dim=2)
 
@@ -238,6 +238,7 @@ class HydroGenerator(DataGenerator):
                             target_mask=self.target_mask,
                             dropout_rate=self.dropout_rate,
                             embedding=True,
+                            concat_static_features=self.concat_static_features,
                             observe_at_target=True)
 
         return task
@@ -343,7 +344,7 @@ class HydroGenerator(DataGenerator):
         task['y_att_context'] = task['y_att'] * torch.ones(task['x_context'].shape).to(device)
         task['y_att_target'] = task['y_att'] * torch.ones(task['x_target'].shape).to(device)
         
-        if self.concat_attributes:
+        if self.concat_static_features:
             task['y_context'] = torch.cat([task['y_context'],task['y_att_context']],dim=2)
             task['y_target'] = torch.cat([task['y_target'],task['y_att_target']],dim=2)
 
@@ -352,7 +353,7 @@ class HydroGenerator(DataGenerator):
                             target_mask=self.target_mask,
                             dropout_rate=self.dropout_rate,
                             embedding=True,
-                            concat_attributes=self.concat_attributes,
+                            concat_static_features=self.concat_static_features,
                             observe_at_target=True)
 
         return task
