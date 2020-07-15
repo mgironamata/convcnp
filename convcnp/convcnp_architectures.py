@@ -334,7 +334,7 @@ class ConvCNP(nn.Module):
             Used to discretize function.
     """
 
-    def __init__(self, in_channels, rho, points_per_unit, dynamic_feature_embedding=True,static_feature_embedding=True,dynamic_embedding_dims=5,static_embedding_dims=5,static_embedding_location="after_encoder",dynamic_feature_missing_data=True,static_feature_missing_data=True,static_embedding_in_channels=2):
+    def __init__(self, in_channels, rho, points_per_unit, dynamic_feature_embedding=True,static_feature_embedding=True,dynamic_embedding_dims=5,static_embedding_dims=5,static_embedding_location="after_encoder",dynamic_feature_missing_data=True,static_feature_missing_data=True,static_embedding_in_channels=2,distribution='gaussian'):
         super(ConvCNP, self).__init__()
         self.activation = nn.Sigmoid()
         self.sigma_fn = nn.Softplus()
@@ -350,6 +350,8 @@ class ConvCNP(nn.Module):
         self.static_feature_embedding = static_feature_embedding
         self.static_feature_missing_data = static_feature_missing_data
         self.static_embedding_location = static_embedding_location
+
+        self.distribution = distribution
         
         if self.dynamic_feature_embedding:
             self.in_channels = dynamic_embedding_dims
@@ -445,7 +447,11 @@ class ConvCNP(nn.Module):
             h = torch.cat([h,h_s],dim=2)
 
         # Produce means and standard deviations.
-        mean = self.sigma_fn(self.mean_layer(x_grid, h, x_out))
+        if self.distribution == 'gaussian':
+            mean = self.mean_layer(x_grid, h, x_out)
+        elif self.distribution == 'gamma':
+            mean = self.sigma_fn(self.mean_layer(x_grid, h, x_out))
+
         sigma = self.sigma_fn(self.sigma_layer(x_grid, h, x_out))
         
         return mean, sigma
