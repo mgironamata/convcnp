@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from .task_preprocessing import *
 from .utils import device
 
+
 __all__ = ['HydroGenerator']
 
 def _rand(val_range, *shape):
@@ -126,6 +127,7 @@ class HydroGenerator(DataGenerator):
                 timeslice = 60,
                 dropout_rate = 0,
                 concat_static_features = True,
+                device = device,
                 **kw_args):     
 
         self.dataframe = dataframe
@@ -140,6 +142,7 @@ class HydroGenerator(DataGenerator):
         self.timeslice = timeslice
         self.dropout_rate = dropout_rate
         self.concat_static_features = concat_static_features
+        self.device = device
         DataGenerator.__init__(self,**kw_args)
     
     def sample(self,x,df):
@@ -222,12 +225,12 @@ class HydroGenerator(DataGenerator):
 
         # Stack batch and convert to PyTorch.
         task = {k: torch.tensor(_uprank(np.stack(v, axis=0)),
-                                dtype=torch.float32).to(device)
+                                dtype=torch.float32).to(self.device)
                 for k, v in task.items()}
 
         task['y_att'] = task['y_att'].permute([0,2,1])
-        task['y_att_context'] = task['y_att'] * torch.ones(task['x_context'].shape).to(device)
-        task['y_att_target'] = task['y_att'] * torch.ones(task['x_target'].shape).to(device)
+        task['y_att_context'] = task['y_att'] * torch.ones(task['x_context'].shape).to(self.device)
+        task['y_att_target'] = task['y_att'] * torch.ones(task['x_target'].shape).to(self.device)
         
         if self.concat_static_features:
             task['y_context'] = torch.cat([task['y_context'],task['y_att_context']],dim=2)
@@ -239,7 +242,8 @@ class HydroGenerator(DataGenerator):
                             dropout_rate=self.dropout_rate,
                             embedding=True,
                             concat_static_features=self.concat_static_features,
-                            observe_at_target=True)
+                            observe_at_target=True,
+                            device=self.device)
 
         return task
 
@@ -337,12 +341,12 @@ class HydroGenerator(DataGenerator):
         
         # Stack batch and convert to PyTorch.
         task = {k: torch.tensor(_uprank(np.stack(v, axis=0)),
-                                dtype=torch.float32).to(device)
+                                dtype=torch.float32).to(self.device)
                 for k, v in task.items()}
 
         task['y_att'] = task['y_att'].permute([0,2,1])
-        task['y_att_context'] = task['y_att'] * torch.ones(task['x_context'].shape).to(device)
-        task['y_att_target'] = task['y_att'] * torch.ones(task['x_target'].shape).to(device)
+        task['y_att_context'] = task['y_att'] * torch.ones(task['x_context'].shape).to(self.device)
+        task['y_att_target'] = task['y_att'] * torch.ones(task['x_target'].shape).to(self.device)
         
         if self.concat_static_features:
             task['y_context'] = torch.cat([task['y_context'],task['y_att_context']],dim=2)
@@ -354,6 +358,7 @@ class HydroGenerator(DataGenerator):
                             dropout_rate=self.dropout_rate,
                             embedding=True,
                             concat_static_features=self.concat_static_features,
-                            observe_at_target=True)
+                            observe_at_target=True,
+                            device=device)
 
         return task
