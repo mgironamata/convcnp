@@ -21,3 +21,6 @@ class HydroDataset(Dataset):
         
     def __len__(self):
         return self.num_tasks_epoch
+
+    def batch_size(self):
+        return self.gen.batch_size

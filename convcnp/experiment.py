@@ -122,7 +122,7 @@ class RunningAverage:
 
     def update(self, val, n=1):
         """Update the running average.
-
+        
         Args:
             val (float): Value to update with.
             n (int): Number elements used to compute `val`.

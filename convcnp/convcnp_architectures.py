@@ -86,7 +86,7 @@ class DeepSet(nn.Module):
         # Shape: (batch, n_in, embedding_channels, out_channels).
         y_out = y.view(batch_size * n_in * embedding_channels, -1)
         f = f.view(batch_size * n_in * embedding_channels, -1)
-        
+
         if self.in_channels == 2:
             y_out = torch.cat([y_out,f],dim=1)
         
@@ -99,12 +99,19 @@ class DeepSet(nn.Module):
         # Sum over the embedding_channels.
         # Shape of y_out and m: (batch, n_in, embedding_channels, out_channels).
         y_out = y_out * m
-        y_out = torch.div(y_out.sum(2),m.sum(2))
+        den = m.sum(2)
+        
+        if den[den==0].shape[0]>0:
+            #print("warning empty set")
+            den [den == 0] = float('inf')
+        
+        y_out = torch.div(y_out.sum(2),den)
         #replace empty sets with 0 values
-        
-        #print("Warning: empty set occurred") if y_out[y_out != y_out].shape[0] > 0 else pass
-        
-        y_out[y_out != y_out] = 0
+
+        #if y_out[y_out != y_out].shape[0] > 0:
+        #    print("Warning: empty set occurred")
+
+        #y_out[y_out != y_out] = 0
         
         # Shape: (batch, n_in, out_channels).
         y_out = y_out.view(batch_size * n_in, self.out_channels)
