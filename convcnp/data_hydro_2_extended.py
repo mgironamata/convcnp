@@ -154,7 +154,7 @@ class HydroGenerator(DataGenerator):
     def sample_date(self,x,df):
         return np.vstack(tuple(df[key][x] for key in ['YR','DOY']))
 
-    def generate_task(self):
+    def generate_task(self,index=0):
         task = {'x': [],
                 'y': [],
                 'x_context': [],

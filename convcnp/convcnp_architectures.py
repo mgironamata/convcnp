@@ -144,6 +144,12 @@ def compute_dists_2D(x_context, x_target):
         
         return (t1 + t2)
 
+def random_masking(x, dropout_rate):
+
+    masking = torch.distributions.Bernoulli(x*(1-dropout_rate))
+    
+    return x * masking.sample()
+
 
 class ConvDeepSet(nn.Module):
     """One-dimensional ConvDeepSet module. Uses an RBF kernel for psi(x, x').
@@ -211,8 +217,8 @@ class ConvDeepSet(nn.Module):
         
         # Compute the pairwise distances.
         # Shape: (batch, n_in, n_out).
-        
         dists = compute_dists(x, t)
+
         # Compute the weights.
         # Shape: (batch, n_in, n_out, in_channels).
         wt = self.rbf(dists)
@@ -341,7 +347,19 @@ class ConvCNP(nn.Module):
             Used to discretize function.
     """
 
-    def __init__(self, in_channels, rho, points_per_unit, dynamic_feature_embedding=True,static_feature_embedding=True,dynamic_embedding_dims=5,static_embedding_dims=5,static_embedding_location="after_encoder",dynamic_feature_missing_data=True,static_feature_missing_data=True,static_embedding_in_channels=2,distribution='gaussian'):
+    def __init__(self, 
+                in_channels, 
+                rho, 
+                points_per_unit, 
+                dynamic_feature_embedding=True,
+                static_feature_embedding=True,
+                dynamic_embedding_dims=5,
+                static_embedding_dims=5,
+                static_embedding_location="after_encoder",
+                dynamic_feature_missing_data=True,
+                static_feature_missing_data=True,
+                static_embedding_in_channels=2,
+                distribution='gaussian'):
         super(ConvCNP, self).__init__()
         self.activation = nn.Sigmoid()
         self.sigma_fn = nn.Softplus()
@@ -372,7 +390,7 @@ class ConvCNP(nn.Module):
         init_length_scale = 2.0 / self.points_per_unit
         
         # Instantiate dynamic feature embedder
-        self.dynamic_embedder = DeepSet(self.pre_embedding_channels,self.in_channels)
+        self.preprocessor = DeepSet(self.pre_embedding_channels,self.in_channels)
         
         # Instantiate static feature embedder
         if static_feature_missing_data:
@@ -400,7 +418,7 @@ class ConvCNP(nn.Module):
         self.sigma_layer = FinalLayer(in_channels=final_layer_in_channels,
                                       init_length_scale=init_length_scale)
 
-    def forward(self, x, y, x_out, y_att=None, f=None, m=None, embedding=False, f_s=None, m_s=None):
+    def forward(self, x, y, x_out, y_att=None, f=None, m=None, embedding=False, f_s=None, m_s=None, static_masking_rate=0):
         """Run the model forward.
 
         Args:
@@ -425,12 +443,12 @@ class ConvCNP(nn.Module):
         # Apply first layer and conv net. Take care to put the axis ranging
         # over the data last.
         if self.dynamic_feature_embedding:
-            y = self.dynamic_embedder(y,f,m)
+            y = self.preprocessor(y,f,m)
 
         h = self.activation(self.encoder(x, y, x_grid))
     
         if (y_att != None) & (self.static_embedding_location=="after_encoder"):
-            m_att = torch.tensor(np.ones(y_att.shape[2]), dtype=torch.float)[None,None,:].repeat(y_att.shape[0],y_att.shape[1],1).to(device)
+            m_att = random_masking(torch.tensor(np.ones(y_att.shape[2]), dtype=torch.float),static_masking_rate)[None,None,:].repeat(y_att.shape[0],y_att.shape[1],1).to(device)
             f_att = torch.tensor(np.arange(y_att.shape[2])/y_att.shape[2], dtype=torch.float)[None,None,:].repeat(y_att.shape[0],y_att.shape[1],1).to(device)
             h_s = self.static_embedder(y_att,f_att,m_att)
             h_s = h_s.repeat(1,h.shape[1],1)
@@ -447,7 +465,7 @@ class ConvCNP(nn.Module):
             raise RuntimeError('Shape changed.')
         
         if (y_att != None) & (self.static_embedding_location=="after_rho"):
-            m_att = torch.tensor(np.ones(y_att.shape[2]), dtype=torch.float)[None,None,:].repeat(y_att.shape[0],y_att.shape[1],1).to(device)
+            m_att = random_masking(torch.tensor(np.ones(y_att.shape[2]), dtype=torch.float),static_masking_rate)[None,None,:].repeat(y_att.shape[0],y_att.shape[1],1).to(device)
             f_att = torch.tensor(np.arange(y_att.shape[2])/y_att.shape[2], dtype=torch.float)[None,None,:].repeat(y_att.shape[0],y_att.shape[1],1).to(device)
             h_s = self.static_embedder(y_att,f_att,m_att)
             h_s = h_s.repeat(1,h.shape[1],1)
