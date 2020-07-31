@@ -274,7 +274,6 @@ class HydroGenerator(DataGenerator):
             s_ind = s_ind - self.timeslice
         elif s_ind - s_ind_b < self.timeslice:
             s_ind = s_ind_b
-            print("WARNING")
             
         df = self.dataframe[s_ind:e_ind]
 
@@ -359,6 +358,6 @@ class HydroGenerator(DataGenerator):
                             embedding=True,
                             concat_static_features=self.concat_static_features,
                             observe_at_target=True,
-                            device=device)
+                            device=self.device)
 
         return task

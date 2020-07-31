@@ -31,7 +31,7 @@ def random_mask(task, dropout_rate):
 
     context = torch.distributions.Bernoulli(task['m_context']*(1-dropout_rate))
     target = torch.distributions.Bernoulli(task['m_target']*(1-dropout_rate))
-
+    
     task['m_context'] = task['m_context']*context.sample()
     task['m_target'] = task['m_target']*target.sample()
 

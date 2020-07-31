@@ -17,19 +17,16 @@ def plot_task(task, idx, legend):
     if legend:
         plt.legend()
 
-def plot_training_loss(train_obj_list, train_nse_list):
+def plot_training_loss(train_loss, test_loss):
     
-    fig = plt.figure(figsize=(15,5))
+    fig = plt.figure(figsize=(7,5))
     
-    plt.subplot(1,2,1)
-    plt.plot(train_obj_list,'r')
-    plt.ylabel('Train NLL')
+    plt.plot(train_loss,'r',label='train NLL')
+    plt.plot(test_loss, 'b', label='test NLL')
+    plt.ylabel('NLL')
     plt.xlabel('# epochs')
 
-    plt.subplot(1,2,2)
-    plt.plot(train_nse_list,'b')
-    plt.ylabel('Test NLL')
-    plt.xlabel('# epochs')
+    plt.legend()
 
     #fig.suptitle('ConvCNP (Gaussian LL w/ new decoder)', fontsize = 16)
     plt.show()

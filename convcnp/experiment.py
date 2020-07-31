@@ -34,7 +34,7 @@ def save_checkpoint(wd, state, is_best):
         is_best (bool): This model is the best so far.
     """
     fn = wd.file('checkpoint.pth.tar')
-    torch.save(state, fn)
+    torch.save(state, fn,   )
     if is_best:
         fn_best = wd.file('model_best.pth.tar')
         shutil.copyfile(fn, fn_best)

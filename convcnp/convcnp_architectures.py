@@ -1,8 +1,9 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import pdb
 
-from convcnp.utils import (
+from    .utils import (
     init_sequential_weights,
     to_multiple,
 )
@@ -102,7 +103,8 @@ class DeepSet(nn.Module):
         den = m.sum(2)
         
         if den[den==0].shape[0]>0:
-            #print("warning empty set")
+            print("warning empty set")
+            pdb.set_trace()
             den [den == 0] = float('inf')
         
         y_out = torch.div(y_out.sum(2),den)
@@ -145,9 +147,7 @@ def compute_dists_2D(x_context, x_target):
         return (t1 + t2)
 
 def random_masking(x, dropout_rate):
-
     masking = torch.distributions.Bernoulli(x*(1-dropout_rate))
-    
     return x * masking.sample()
 
 
@@ -378,6 +378,7 @@ class ConvCNP(nn.Module):
 
         self.distribution = distribution
         
+        #Define number of input channels to dynamic feature embedding (pre_embedding channels)
         if self.dynamic_feature_embedding:
             self.in_channels = dynamic_embedding_dims
             self.pre_embedding_channels = 2
@@ -390,29 +391,33 @@ class ConvCNP(nn.Module):
         init_length_scale = 2.0 / self.points_per_unit
         
         # Instantiate dynamic feature embedder
-        self.preprocessor = DeepSet(self.pre_embedding_channels,self.in_channels)
+        if self.dynamic_feature_embedding:
+            self.preprocessor = DeepSet(self.pre_embedding_channels,self.in_channels)
         
         # Instantiate static feature embedder
-        if static_feature_missing_data:
-            self.static_embedder = DeepSet(self.static_embedding_in_channels,self.static_embedding_dims)
+        if self.static_feature_embedding:
+            if self.static_feature_missing_data:
+                self.static_embedder = DeepSet(self.static_embedding_in_channels,self.static_embedding_dims)
+            else:
+                self.static_embedder = FeatureEmbedding(self.static_embedding_in_channels,self.static_embedding_dims)
+                
+        # Define number of output channels from encoder
+        if self.static_feature_embedding and self.static_embedding_location == "after_encoder":
+            self.encoder_out_channels = self.rho.in_channels-self.static_embedding_dims 
         else:
-            self.static_embedder = FeatureEmbedding(self.static_embedding_in_channels,self.static_embedding_dims)
-            
-        # Instantiate encoder
-        if self.static_embedding_location == "after_encoder":
-            encoder_out_channels = self.rho.in_channels-self.static_embedding_dims 
-        else:
-            encoder_out_channels = self.rho.in_channels
-            
-        self.encoder = ConvDeepSet(in_channels=self.in_channels, out_channels=encoder_out_channels,
-                                   init_length_scale=init_length_scale)
-                 
-        # Instantiate mean and standard deviation layers
-        if self.static_embedding_location == "after_rho":
+            self.encoder_out_channels = self.rho.in_channels
+                
+        self.encoder = ConvDeepSet(in_channels=self.in_channels, out_channels=self.encoder_out_channels,
+                                    init_length_scale=init_length_scale)
+
+        # Instantiate static feature embedder "after decoder" (if required)
+        # Define number of input channels to final layer
+        if self.static_feature_embedding and self.static_embedding_location == "after_rho":
             final_layer_in_channels = self.rho.out_channels+self.static_embedding_dims
         else:
             final_layer_in_channels = self.rho.out_channels
-            
+
+        # Instantiate mean and standard deviation layers    
         self.mean_layer = FinalLayer(in_channels=final_layer_in_channels,
                                      init_length_scale=init_length_scale)
         self.sigma_layer = FinalLayer(in_channels=final_layer_in_channels,
@@ -447,7 +452,7 @@ class ConvCNP(nn.Module):
 
         h = self.activation(self.encoder(x, y, x_grid))
     
-        if (y_att != None) & (self.static_embedding_location=="after_encoder"):
+        if (self.static_feature_embedding) and (y_att != None) and (self.static_embedding_location=="after_encoder"):
             m_att = random_masking(torch.tensor(np.ones(y_att.shape[2]), dtype=torch.float),static_masking_rate)[None,None,:].repeat(y_att.shape[0],y_att.shape[1],1).to(device)
             f_att = torch.tensor(np.arange(y_att.shape[2])/y_att.shape[2], dtype=torch.float)[None,None,:].repeat(y_att.shape[0],y_att.shape[1],1).to(device)
             h_s = self.static_embedder(y_att,f_att,m_att)
@@ -464,7 +469,7 @@ class ConvCNP(nn.Module):
         if h.shape[1] != x_grid.shape[1]:
             raise RuntimeError('Shape changed.')
         
-        if (y_att != None) & (self.static_embedding_location=="after_rho"):
+        if (self.static_feature_embedding) and (y_att != None) and (self.static_embedding_location=="after_rho"):
             m_att = random_masking(torch.tensor(np.ones(y_att.shape[2]), dtype=torch.float),static_masking_rate)[None,None,:].repeat(y_att.shape[0],y_att.shape[1],1).to(device)
             f_att = torch.tensor(np.arange(y_att.shape[2])/y_att.shape[2], dtype=torch.float)[None,None,:].repeat(y_att.shape[0],y_att.shape[1],1).to(device)
             h_s = self.static_embedder(y_att,f_att,m_att)
@@ -474,10 +479,11 @@ class ConvCNP(nn.Module):
         # Produce means and standard deviations.
         if self.distribution == 'gaussian':
             mean = self.mean_layer(x_grid, h, x_out)
-        elif self.distribution == 'gamma':
-            mean = self.sigma_fn(self.mean_layer(x_grid, h, x_out))
+            sigma = self.sigma_fn(self.sigma_layer(x_grid, h, x_out))
 
-        sigma = self.sigma_fn(self.sigma_layer(x_grid, h, x_out))
+        elif self.distribution == 'gamma':
+            mean = self.sigma_fn(self.mean_layer(x_grid, h, x_out))+1e-8
+            sigma = self.sigma_fn(self.sigma_layer(x_grid, h, x_out))+1e-8
         
         return mean, sigma
 
