@@ -1,4 +1,3 @@
-
 from scipy.special import inv_boxcox
 from scipy.stats import boxcox
 import numpy as np
@@ -35,8 +34,8 @@ def boxcox_transform(x, e=0):
 def rev_standardise(x_t, mu, sigma):
     return x_t*sigma + mu
 
-def rev_normalise(x_t, x_min, x_max):
-    return x_t*(x_max - x_min) + x_min   
+def rev_normalise(x_t, min, max):
+    return x_t*(max - min) + min   
     
 def rev_log_transform(x, e=1e-6):
     return np.exp(x)-e  
@@ -44,10 +43,44 @@ def rev_log_transform(x, e=1e-6):
 def rev_boxcox_transform(x, ld):
     return inv_boxcox(x, ld)
 
-'TORCH REV TRANSFORM'
+'REV BOXCOX TRANSFORM USING TENSORS'
 
 def rev_boxcox_transform_tensor(x,ld):
         if ld == 0:
             return torch.exp(x)
         else:
             return torch.exp(torch.log(ld*x+1)/ld) 
+
+def rev_transform(x, transform="NONE", scaling="NONE", mu=None, sigma=None, min=None, max=None, e=1, ld=None, s=0):
+
+    if scaling == "STANRDARD":
+        x = rev_standardise(x, mu=mu, sigma=sigma)
+    elif scaling == "NORM":
+        x = rev_normalise(x, x_min=min, x_max=max)
+    else:
+        pass
+
+    if transform == "LOG"
+        x = rev_log_transform(x,e=e)
+    if transform == "BOXCOX"
+        x = rev_boxcox_transform(x, ld=ld)
+
+    return x - s
+
+def rev_transform_tensor(x, transform="NONE", scaling="NONE", mu=None, sigma=None, min=None, max=None, e=1, ld=None, s=0):
+
+    if scaling == "STANRDARD":
+        x = rev_standardise(x, mu=mu, sigma=sigma)
+    elif scaling == "NORM":
+        x = rev_normalise(x, x_min=min, x_max=max)
+    else:
+        pass
+
+    if transform == "LOG"
+        x = torch.exp(x) - e
+    if transform == "BOXCOX"
+        x = rev_boxcox_transform_tensor(x, ld=ld)
+
+    return x - s
+    
+    

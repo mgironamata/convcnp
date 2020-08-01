@@ -2,7 +2,8 @@ import matplotlib.pyplot as plt
 import numpy as np 
 import torch
 import scipy.stats
-import scipy.special 
+import scipy.special
+from typing import Dict, Tuple
 from .utils import *
 
 def plot_task(task, idx, legend):
@@ -30,3 +31,22 @@ def plot_training_loss(train_loss, test_loss):
 
     #fig.suptitle('ConvCNP (Gaussian LL w/ new decoder)', fontsize = 16)
     plt.show()
+
+def ecdf(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Calculate empirical cummulative density function
+    
+    Parameters
+    ----------
+    x : np.ndarray
+        Array containing the data
+    
+    Returns
+    -------
+    x : np.ndarray
+        Array containing the sorted metric values
+    y : np.ndarray]
+        Array containing the sorted cdf values
+    """
+    xs = np.sort(x)
+    ys = np.arange(1, len(xs) + 1) / float(len(xs))
+    return xs, ys

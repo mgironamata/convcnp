@@ -11,8 +11,8 @@ class HydroDataset(Dataset):
         self.gen = gen
         self.num_tasks_epoch = num_tasks_epoch
         
-        self.min_train_points = np.random.randint(2, 5, self.num_tasks_epoch+1)
-        self.max_train_points = np.random.randint(20, 25, self.num_tasks_epoch+1)
+        self.min_train_points = np.random.randint(50, 60, self.num_tasks_epoch+1)
+        self.max_train_points = np.random.randint(140, 150, self.num_tasks_epoch+1)
                 
     def __getitem__(self,index):
          
