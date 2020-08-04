@@ -104,7 +104,6 @@ class DeepSet(nn.Module):
         
         if den[den==0].shape[0]>0:
             #print("warning empty set")
-            #pdb.set_trace()
             den [den == 0] = float('inf')
         
         y_out = torch.div(y_out.sum(2),den)

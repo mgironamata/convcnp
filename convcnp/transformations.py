@@ -60,12 +60,13 @@ def rev_transform(x, transform="NONE", scaling="NONE", mu=None, sigma=None, min=
     else:
         pass
 
-    if transform == "LOG"
+    if transform == "LOG":
         x = rev_log_transform(x,e=e)
-    if transform == "BOXCOX"
+    if transform == "BOXCOX":
         x = rev_boxcox_transform(x, ld=ld)
 
     return x - s
+
 
 def rev_transform_tensor(x, transform="NONE", scaling="NONE", mu=None, sigma=None, min=None, max=None, e=1, ld=None, s=0):
 
@@ -76,11 +77,15 @@ def rev_transform_tensor(x, transform="NONE", scaling="NONE", mu=None, sigma=Non
     else:
         pass
 
-    if transform == "LOG"
+    if transform == "LOG":
         x = torch.exp(x) - e
-    if transform == "BOXCOX"
+    if transform == "BOXCOX":
         x = rev_boxcox_transform_tensor(x, ld=ld)
 
     return x - s
-    
-    
+
+def rev_lognormal(mu_log, sigma_log):
+    E = np.exp(mu_log + 0.5*sigma_log**2)
+    Var = (E**2)*(np.exp(sigma_log**2)-1)
+    return E, np.sqrt(Var)
+
