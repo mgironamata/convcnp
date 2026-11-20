@@ -1,0 +1,178 @@
+#!/usr/bin/env python
+"""Generate the experiment configs in nh_experiments/configs/ from one shared definition.
+
+Everything that is not model-specific (basins, forcings, inputs, attributes, periods, loss,
+metrics) is shared, so LSTM vs ConvCNP comparisons differ only in the model block.
+
+  python nh_experiments/scripts/make_configs.py
+"""
+from pathlib import Path
+
+from ruamel.yaml import YAML
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = "/scratch2/mg963/data/camels_us/CAMELS_US"
+RUN_DIR = "/scratch2/mg963/convcnp_runs"
+BASINS = str(ROOT / "basins" / "531_basin_list.txt")
+
+DYNAMIC = ["prcp(mm/day)", "srad(W/m2)", "tmax(C)", "tmin(C)", "vp(Pa)"]
+# the 27 static attributes of Kratzert et al. (2019, HESS) / neuralhydrology CAMELS-US tutorials
+STATIC = ["elev_mean", "slope_mean", "area_gages2", "frac_forest", "lai_max", "lai_diff", "gvf_max",
+          "gvf_diff", "soil_depth_pelletier", "soil_depth_statsgo", "soil_porosity", "soil_conductivity",
+          "max_water_content", "sand_frac", "silt_frac", "clay_frac", "carbonate_rocks_frac",
+          "geol_permeability", "p_mean", "pet_mean", "aridity", "frac_snow", "high_prec_freq",
+          "high_prec_dur", "low_prec_freq", "low_prec_dur", "p_seasonality"]
+METRICS = ["NSE", "KGE", "Alpha-NSE", "Beta-NSE", "Pearson-r", "FHV", "FLV", "FMS", "Peak-Timing"]
+
+# --- periods (neuralhydrology uses dd/mm/yyyy) ----------------------------------------------------
+PERIODS = {
+    # Kratzert et al. 2019 (HESS), the published LSTM/EA-LSTM benchmark setup
+    "kratzert2019": dict(train_start_date="01/10/1999", train_end_date="30/09/2008",
+                         validation_start_date="01/10/1980", validation_end_date="30/09/1989",
+                         test_start_date="01/10/1989", test_end_date="30/09/1999"),
+    # the MRes split (= Newman et al. 2015 SAC-SMA calibration/validation split, first/last 15 WY).
+    # Validation here re-uses the last 5 training years: monitoring only, NO model selection
+    # (we always evaluate the last epoch). Use the *_tune configs for hyper-parameter search.
+    "mres": dict(train_start_date="01/10/1980", train_end_date="30/09/1995",
+                 validation_start_date="01/10/1990", validation_end_date="30/09/1995",
+                 test_start_date="01/10/1995", test_end_date="30/09/2010"),
+    # hyper-parameter tuning inside the MRes training period (test period never touched)
+    "mres_tune": dict(train_start_date="01/10/1980", train_end_date="30/09/1990",
+                      validation_start_date="01/10/1990", validation_end_date="30/09/1995",
+                      test_start_date="01/10/1990", test_end_date="30/09/1995"),
+}
+
+COMMON = dict(
+    run_dir=RUN_DIR,
+    data_dir=DATA_DIR,
+    dataset="camels_us",
+    forcings=["daymet"],
+    train_basin_file=BASINS, validation_basin_file=BASINS, test_basin_file=BASINS,
+    dynamic_inputs=DYNAMIC,
+    static_attributes=STATIC,
+    target_variables=["QObs(mm/d)"],
+    clip_targets_to_zero=["QObs(mm/d)"],
+    loss="NSE",
+    metrics=METRICS,
+    optimizer="Adam",
+    clip_gradient_norm=1.0,
+    device="cuda:0",
+    num_workers=8,
+    seed=1,
+    validate_every=5,
+    validate_n_random_basins=100,
+    save_weights_every=5,
+    log_interval=5,
+    log_tensorboard=True,
+    log_n_figures=0,
+    save_validation_results=False,
+    cache_validation_data=True,
+)
+
+# Kratzert et al. 2019-style LSTM (neuralhydrology `cudalstm`, standard published hyper-parameters)
+LSTM = dict(
+    model="cudalstm", head="regression", output_activation="linear",
+    hidden_size=256, initial_forget_bias=3, output_dropout=0.4,
+    seq_length=365, predict_last_n=1,
+    batch_size=256, epochs=30,
+    learning_rate={0: 1e-3, 10: 5e-4, 25: 1e-4},
+)
+
+# Causal ConvCNP. Receptive field with these settings = 1 + 14 + 14 + 2*2*(1+2+...+64) = 537 days,
+# so seq_length >= 537 + 365 - 1 = 901 gives every training target exactly its test-time history.
+CONVCNP = dict(
+    model="convcnp", head="regression", output_activation="linear",
+    output_dropout=0.1,
+    seq_length=910, predict_last_n=365,
+    batch_size=64, epochs=30, max_updates_per_epoch=1000,
+    learning_rate={0: 1e-3, 10: 5e-4, 25: 1e-4},
+    convcnp=dict(channels=64, kernel_size=3, n_blocks=7, dilation_base=2, dropout=0.1,
+                 encoder_kernel_size=15, decoder_kernel_size=15, init_length_scale=2.0,
+                 causal=True, static_hidden=64, input_dropout=0.0),
+)
+
+# Probabilistic variant: countable mixture of asymmetric Laplacians (Klotz et al. 2022)
+CONVCNP_CMAL = dict(CONVCNP, head="cmal", n_distributions=3, loss="CMALLoss",
+                    n_samples=100, negative_sample_handling="clip", mc_dropout=False)
+
+# Tuned ConvCNP ("gs"), selected on the tuning split (train WY1981-90, eval WY1991-95):
+# multi-scale SetConv (incl. near-identity 0.25 d), identity path in the read-out, non-negative output
+# (uncentred target + softplus), no per-timestep norm before the head, more dropout, gated TCN blocks,
+# half the updates per epoch (later epochs overfit). See REVIEW.md / nh_experiments/README.md.
+CONVCNP_GS = dict(
+    CONVCNP,
+    output_dropout=0.3,
+    max_updates_per_epoch=500,
+    output_activation="softplus",
+    custom_normalization={"QObs(mm/d)": {"centering": "none"}},
+    convcnp=dict(CONVCNP["convcnp"], dropout=0.25, encoder_scales=[0.25, 2.0, 8.0],
+                 decoder_scales=[0.25, 2.0], decoder_identity=True, out_norm=False, gated=True),
+)
+
+# Tuned ConvCNP with stabilised initialisation ("gss"): identical to CONVCNP_GS plus head_bias_init=1.0
+# (softplus head starts at ~1 normalised flow unit instead of possibly in its flat region). Added after
+# 3/15 PUB runs of CONVCNP_GS were dead from epoch 1 (training loss stuck ~0.1).
+CONVCNP_GSS = dict(CONVCNP_GS, convcnp=dict(CONVCNP_GS["convcnp"], head_bias_init=1.0))
+
+# Probabilistic tuned ConvCNP: identical to CONVCNP_GS except the head (3-component countable mixture
+# of asymmetric Laplacians, Klotz et al. 2022) and its NLL loss. Point prediction for NSE = sample mean.
+CONVCNP_GS_CMAL = dict(CONVCNP_GS, head="cmal", n_distributions=3, loss="CMALLoss",
+                       n_samples=100, negative_sample_handling="clip", mc_dropout=False)
+CONVCNP_GS_CMAL.pop("output_activation")
+
+EXPERIMENTS = {
+    "lstm_kratzert2019": (LSTM, "kratzert2019"),
+    "convcnp_kratzert2019": (CONVCNP, "kratzert2019"),
+    "lstm_mres": (LSTM, "mres"),
+    "convcnp_mres": (CONVCNP, "mres"),
+    "convcnp_cmal_mres": (CONVCNP_CMAL, "mres"),
+    "convcnp_mres_tune": (CONVCNP, "mres_tune"),
+    "lstm_mres_tune": (LSTM, "mres_tune"),
+    "convcnp_gs_mres": (CONVCNP_GS, "mres"),
+    "convcnp_gs_mres_tune": (CONVCNP_GS, "mres_tune"),
+    "convcnp_gs_kratzert2019": (CONVCNP_GS, "kratzert2019"),
+    "convcnp_gs_cmal_mres": (CONVCNP_GS_CMAL, "mres"),
+    "convcnp_gss_mres": (CONVCNP_GSS, "mres"),
+    "convcnp_gss_mres_tune": (CONVCNP_GSS, "mres_tune"),
+    "convcnp_gs_cmal_mres_tune": (CONVCNP_GS_CMAL, "mres_tune"),
+}
+
+# Prediction in ungauged basins (PUB): 5-fold CV over basins (folds from scripts/make_pub_folds.py),
+# MRes periods. Test basins are unseen in space and time; validation only monitors training basins.
+PUB_K = 5
+for _k in range(1, PUB_K + 1):
+    _fold = dict(train_basin_file=str(ROOT / "basins" / f"pub_k{PUB_K}_fold{_k}_train.txt"),
+                 validation_basin_file=str(ROOT / "basins" / f"pub_k{PUB_K}_fold{_k}_train.txt"),
+                 test_basin_file=str(ROOT / "basins" / f"pub_k{PUB_K}_fold{_k}_test.txt"),
+                 validate_n_random_basins=50)
+    EXPERIMENTS[f"lstm_pub_fold{_k}"] = (LSTM, "mres", _fold)
+    EXPERIMENTS[f"convcnp_gs_pub_fold{_k}"] = (CONVCNP_GS, "mres", _fold)
+    EXPERIMENTS[f"convcnp_gss_pub_fold{_k}"] = (CONVCNP_GSS, "mres", _fold)
+
+HEADER = """# Generated by nh_experiments/scripts/make_configs.py -- edit that script, not this file.
+# Experiment: {name}   periods: {periods}
+"""
+
+
+def main():
+    yaml = YAML()
+    yaml.default_flow_style = False
+    out_dir = ROOT / "configs"
+    out_dir.mkdir(exist_ok=True)
+    for name, spec in EXPERIMENTS.items():
+        model, periods = spec[0], spec[1]
+        extra = spec[2] if len(spec) > 2 else {}
+        cfg = {"experiment_name": name}
+        cfg.update(COMMON)
+        cfg.update(PERIODS[periods])
+        cfg.update(model)
+        cfg.update(extra)
+        path = out_dir / f"{name}.yml"
+        with path.open("w") as fp:
+            fp.write(HEADER.format(name=name, periods=periods))
+            yaml.dump(cfg, fp)
+        print("wrote", path)
+
+
+if __name__ == "__main__":
+    main()
