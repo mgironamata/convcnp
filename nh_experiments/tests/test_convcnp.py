@@ -347,3 +347,24 @@ def test_nse_loss_extra_terms_and_warmup():
     assert abs(vals[0] - base) < 1e-7 and abs(vals[1] - base) < 1e-7 and vals[2] > base + 1e-4
     with torch.no_grad():                                      # validation: extra terms on, no counting
         assert L(pred, gt)[0].item() > base + 1e-4
+
+
+def test_hide_days_mask_is_shared_and_fills():
+    import sys as _sys
+    import numpy as np
+    import pandas as pd
+    _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from eval_missing_forcings import hide_days
+    idx = pd.date_range("2000-01-01", periods=2000, freq="D")
+    df = pd.DataFrame({"prcp(mm/day)": np.arange(2000.0), "tmax(C)": np.arange(2000.0) + 1,
+                       "QObs(mm/d)": np.ones(2000)}, index=idx)
+    a = hide_days(df, "01022500", 0.3, "nan", 0)
+    b = hide_days(df, "01022500", 0.3, "ffill", 0)
+    hidden = a["prcp(mm/day)"].isna()
+    assert 0.25 < hidden.mean() < 0.35
+    assert (a["tmax(C)"].isna() == hidden).all() and a["QObs(mm/d)"].notna().all()  # whole day hidden, Q kept
+    assert b.notna().all().all() and (b.loc[~hidden.values] == df.loc[~hidden.values]).all().all()
+    # same mask for a different fill; different basin gives a different mask; input untouched
+    assert (hide_days(df, "01022500", 0.3, "nan", 0)["prcp(mm/day)"].isna() == hidden).all()
+    assert not (hide_days(df, "01031500", 0.3, "nan", 0)["prcp(mm/day)"].isna() == hidden).all()
+    assert df.notna().all().all() and hide_days(df, "x", 0.0, "nan", 0) is df
