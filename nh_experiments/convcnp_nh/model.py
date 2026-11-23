@@ -190,9 +190,14 @@ class ConvCNP(BaseModel):
         super().__init__(cfg=cfg)
         p = _get_convcnp_cfg(cfg)
         self.p = p
-        if isinstance(cfg.dynamic_inputs, dict) or (cfg.dynamic_inputs and isinstance(cfg.dynamic_inputs[0], list)):
-            raise ValueError("ConvCNP supports a flat list of dynamic_inputs (single frequency) only.")
-        self.dynamic_inputs = list(cfg.dynamic_inputs)
+        if isinstance(cfg.dynamic_inputs, dict):
+            raise ValueError("ConvCNP supports single-frequency dynamic_inputs only.")
+        if cfg.nan_handling_method:
+            raise ValueError("nan_handling_method is an LSTM input-layer option; the ConvCNP handles NaN inputs "
+                             "through its density channel (leave it unset).")
+        # A list of lists (feature groups, e.g. one per forcing product) is flattened: groups only matter for
+        # neuralhydrology's training-time NaN simulation (nan_step/sequence_probability), which drops by group.
+        self.dynamic_inputs = list(cfg.dynamic_inputs_flattened)
         n_dyn = len(self.dynamic_inputs)
         if cfg.evolving_attributes:
             raise ValueError("ConvCNP does not support evolving_attributes; add them to dynamic_inputs instead.")
