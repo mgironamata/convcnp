@@ -104,12 +104,17 @@ def _register_alpha_loss():
     The variance ratio is computed per training window over its ``predict_last_n`` target block (365 d for
     the ConvCNP), so it penalises over-smoothing (Alpha-NSE < 1) directly. Windows with fewer than
     ``min_valid`` observed targets are ignored; with ``predict_last_n = 1`` (LSTM) the term is inactive.
+
+    ``peak_loss_weight`` (mu): adds mu * NSE*-scaled squared error on each window's top
+    (1 - ``peak_quantile``) observed flows (default quantile 0.95), see ``window_peak_penalty``.
+    ``loss_warmup_updates``: number of training steps with plain NSE* before the extra terms switch on.
     """
     import torch
     import neuralhydrology.training.loss as nh_loss
 
-    if not hasattr(Config, "alpha_loss_weight"):
-        Config.alpha_loss_weight = property(lambda self: self._cfg.get("alpha_loss_weight", None))
+    for key in ("alpha_loss_weight", "peak_loss_weight", "peak_quantile", "loss_warmup_updates"):
+        if not hasattr(Config, key):
+            setattr(Config, key, property(lambda self, k=key: self._cfg.get(k, None)))
 
     cls = nh_loss.MaskedNSELoss
     original_init, original_get_loss = cls.__init__, cls._get_loss
@@ -117,16 +122,48 @@ def _register_alpha_loss():
     def __init__(self, cfg, eps: float = 0.1):
         original_init(self, cfg, eps=eps)
         self._alpha_w = float(cfg.alpha_loss_weight or 0.0)
+        self._peak_w = float(cfg.peak_loss_weight or 0.0)
+        self._peak_q = float(cfg.peak_quantile or 0.95)
+        self._warmup = int(cfg.loss_warmup_updates or 0)
+        self._n_train_calls = 0
 
     def _get_loss(self, prediction, ground_truth, **kwargs):
         nse = original_get_loss(self, prediction, ground_truth, **kwargs)
-        lam = getattr(self, "_alpha_w", 0.0)
         y, y_hat = ground_truth["y"], prediction["y_hat"]
-        if lam <= 0 or y.shape[1] < 2:
+        alpha_w, peak_w = getattr(self, "_alpha_w", 0.0), getattr(self, "_peak_w", 0.0)
+        if (alpha_w <= 0 and peak_w <= 0) or y.shape[1] < 2:
             return nse
-        return nse + lam * window_alpha_penalty(y_hat, y)
+        if torch.is_grad_enabled():                     # training step (validation runs under no_grad)
+            self._n_train_calls += 1
+            if self._n_train_calls <= self._warmup:     # plain NSE* first, so the model leaves the flat start
+                return nse
+        total = nse
+        if alpha_w > 0:
+            total = total + alpha_w * window_alpha_penalty(y_hat, y)
+        if peak_w > 0:
+            stds = kwargs["per_basin_target_stds"].expand_as(y_hat)
+            total = total + peak_w * window_peak_penalty(y_hat, y, stds, q=self._peak_q, eps=self.eps)
+        return total
 
     cls.__init__, cls._get_loss = __init__, _get_loss
+
+
+def window_peak_penalty(y_hat, y, per_basin_target_stds, q: float = 0.95, eps: float = 0.1, min_valid: int = 30):
+    """NSE*-scaled squared error on each window's high flows (observed targets >= the window's q-quantile).
+
+    Mean over the selected points of (y_hat - y)^2 / (std_basin + eps)^2; windows with fewer than
+    ``min_valid`` observed targets are ignored. Shapes [bs, n, 1].
+    """
+    import torch
+    valid = ~torch.isnan(y)
+    yq = torch.where(valid, y, torch.full_like(y, float("nan")))
+    thr = torch.nanquantile(yq.squeeze(-1), q, dim=1, keepdim=True).unsqueeze(-1)   # [bs, 1, 1]
+    ok = (valid.sum(dim=1, keepdim=True) >= min_valid)
+    sel = valid & (y >= thr) & ok
+    if not sel.any():
+        return y_hat.sum() * 0.0
+    se = (y_hat - torch.nan_to_num(y)) ** 2 / (per_basin_target_stds + eps) ** 2
+    return se[sel].mean()
 
 
 def window_alpha_penalty(y_hat, y, min_valid: int = 30, eps: float = 1e-3):
