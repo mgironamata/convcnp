@@ -44,6 +44,7 @@ DEFAULTS = {
     "kernel_size": 3,            # TCN kernel size
     "n_blocks": 7,               # residual blocks, dilation = dilation_base ** i
     "dilation_base": 2,
+    "local_blocks": 0,           # extra undilated (dilation 1) blocks before the dilated stack (fast local dynamics)
     "dropout": 0.1,              # dropout inside the TCN blocks
     "encoder_kernel_size": 15,   # support (days) of the SetConv encoder kernel
     "decoder_kernel_size": 15,   # support (days) of the SetConv read-out kernel
@@ -199,6 +200,7 @@ class ConvCNP(BaseModel):
         if cfg.use_basin_id_encoding:
             n_static += cfg.number_of_basins
         C = p["channels"]
+        self.dilations = [1] * int(p["local_blocks"]) + [p["dilation_base"] ** i for i in range(p["n_blocks"])]
 
         enc_scales = p["encoder_scales"] or [p["init_length_scale"]]
         dec_scales = p["decoder_scales"] or [p["init_length_scale"]]
@@ -210,13 +212,13 @@ class ConvCNP(BaseModel):
         if n_static > 0:
             self.static_net = nn.Sequential(
                 nn.Linear(n_static, p["static_hidden"]), nn.GELU(),
-                nn.Linear(p["static_hidden"], 2 * C * p["n_blocks"]))
+                nn.Linear(p["static_hidden"], 2 * C * len(self.dilations)))
             nn.init.zeros_(self.static_net[-1].weight)      # start as identity FiLM
             nn.init.zeros_(self.static_net[-1].bias)
 
         self.blocks = nn.ModuleList([
-            TCNBlock(C, p["kernel_size"], p["dilation_base"] ** i, p["dropout"], p["causal"], p["gated"], p["block_norm"], p["skip"])
-            for i in range(p["n_blocks"])])
+            TCNBlock(C, p["kernel_size"], d, p["dropout"], p["causal"], p["gated"], p["block_norm"], p["skip"])
+            for d in self.dilations])
         C_feat = 2 * C if p["skip"] else C                  # residual stream (+ summed skip outputs)
         self.decoder = GaussianSetConv(C_feat, p["decoder_kernel_size"], dec_scales, p["causal"], normalise=False)
         n_head = self.decoder.n_out + (C_feat if p["decoder_identity"] else 0)
@@ -237,7 +239,7 @@ class ConvCNP(BaseModel):
         """Number of past days (incl. the current one) that influence a prediction (causal mode)."""
         p = self.p
         rf = 1 + (self.encoder.kernel_size - 1) + (self.decoder.kernel_size - 1)
-        rf += sum(2 * (p["kernel_size"] - 1) * p["dilation_base"] ** i for i in range(p["n_blocks"]))
+        rf += sum(2 * (p["kernel_size"] - 1) * d for d in self.dilations)
         return rf
 
     def _check_receptive_field(self, cfg: Config):
