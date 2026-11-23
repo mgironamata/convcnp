@@ -368,3 +368,49 @@ def test_hide_days_mask_is_shared_and_fills():
     assert (hide_days(df, "01022500", 0.3, "nan", 0)["prcp(mm/day)"].isna() == hidden).all()
     assert not (hide_days(df, "01031500", 0.3, "nan", 0)["prcp(mm/day)"].isna() == hidden).all()
     assert df.notna().all().all() and hide_days(df, "x", 0.0, "nan", 0) is df
+
+
+def test_grouped_dynamic_inputs_flattened_and_nan_handling_rejected():
+    groups = [DYN[:2], DYN[2:]]
+    m_flat = ConvCNP(make_cfg()).eval()
+    m_grp = ConvCNP(make_cfg(dynamic_inputs=groups)).eval()
+    assert m_grp.dynamic_inputs == DYN
+    m_grp.load_state_dict(m_flat.state_dict())
+    batch = make_batch()
+    assert torch.allclose(m_flat(clone(batch))["y_hat"], m_grp(clone(batch))["y_hat"])
+    with pytest.raises(ValueError):
+        ConvCNP(make_cfg(dynamic_inputs=groups, nan_handling_method="masked_mean"))
+
+
+def test_full_series_pass_equals_last_step_of_windows():
+    # basis of eval_missing_scenarios' fast ConvCNP path: one causal pass == per-window last step
+    model = ConvCNP(make_cfg()).eval()
+    rf, T = model.receptive_field, 400
+    full = make_batch(B=1, T=T, seed=3)
+    full["x_d"][DYN[0]][0, ::7] = float("nan")
+    with torch.no_grad():
+        y_full = model(clone(full))["y_hat"][0, :, 0]
+        for end in (rf - 1, 250, T - 1):
+            win = {"x_d": {k: v[:, end - rf + 1:end + 1] for k, v in full["x_d"].items()}, "x_s": full["x_s"]}
+            assert torch.allclose(model(win)["y_hat"][0, -1, 0], y_full[end], atol=1e-5)
+
+
+def test_scenario_masks():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import numpy as np
+    from eval_missing_scenarios import SCENARIOS, group_masks, product_of
+    assert [product_of(c) for c in ("prcp(mm/day)_daymet", "Tmax(C)_nldas_extended", "vp(Pa)_maurer_extended",
+                                    "prcp(mm/day)")] == ["daymet", "nldas", "maurer", None]
+    prods, n = ["daymet", "maurer", "nldas"], 20000
+    assert not group_masks(n, "b", "clean", 3, prods).any()
+    ind = group_masks(n, "b", "indep_p30", 3, prods)
+    assert np.allclose(ind.mean(axis=1), 0.3, atol=0.02) and abs(ind.all(axis=0).mean() - 0.027) < 0.01
+    allday = group_masks(n, "b", "allday_p30", 3, prods)
+    assert (allday == allday[0]).all() and abs(allday[0].mean() - 0.3) < 0.02
+    assert (group_masks(n, "b", "indep_p30", 3, prods) == ind).all()          # deterministic, same for all models
+    assert not (group_masks(n, "c", "indep_p30", 3, prods) == ind).all()      # differs between basins
+    keep = group_masks(n, "b", "keep_daymet_nldas", 3, prods)
+    assert keep[1].all() and not keep[0].any() and not keep[2].any()
+    with pytest.raises(ValueError):
+        group_masks(n, "b", "keep_daymet", 1, [None])
+    assert len(SCENARIOS) == 13
