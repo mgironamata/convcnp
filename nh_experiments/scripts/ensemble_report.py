@@ -4,6 +4,8 @@
   python nh_experiments/scripts/ensemble_report.py mres   # gauged MRes: LSTM 3/5/6 seeds, gs3, LSTM3+gs3
   python nh_experiments/scripts/ensemble_report.py pub    # PUB: LSTM3, gss3, LSTM3+gss3 (pooled over 5 folds)
   python nh_experiments/scripts/ensemble_report.py pilots # tuning-split pilots (batches L, M, N) vs gss seed 1
+  python nh_experiments/scripts/ensemble_report.py gss6   # gauged MRes: gss 6 seeds vs LSTM3/LSTM5, gs3
+  python nh_experiments/scripts/ensemble_report.py missing # forcing days hidden (eval_missing_forcings.py)
 
 Ensembles average the members' simulated series and recompute the metrics (summarize.ensemble_metrics).
 """
@@ -75,6 +77,28 @@ def main(which):
         rows = {"lstm_ref": single(run_dir("tune_lstm_ref", 1))}
         rows.update({n: single(run_dir(f"tune_L_{n}", 1)) for n in names})
         table(rows, [(n, "gss") for n in names if n != "gss"] + [("lstm_ref", "gss")], "pilots_LMN_seed1")
+    elif which == "gss6":
+        L = lambda s: [run_dir("lstm_mres", k) for k in s]
+        G = lambda s: [run_dir("convcnp_gss_mres", k) for k in s]
+        rows = {"LSTM3 (s1-3)": ens(L((1, 2, 3))), "LSTM5 (s1-5)": ens(L((1, 2, 3, 4, 5))),
+                "gs3": ens([run_dir("convcnp_gs_mres", k) for k in (1, 2, 3)]), "gss3 (s1-3)": ens(G((1, 2, 3))),
+                "gss6 (s1-6)": ens(G(range(1, 7))), "LSTM5+gss6": ens(L((1, 2, 3, 4, 5)) + G(range(1, 7)))}
+        rows.update({f"gss s{k}": single(run_dir("convcnp_gss_mres", k)) for k in range(1, 7)})
+        table(rows, [("gss6 (s1-6)", "LSTM3 (s1-3)"), ("gss6 (s1-6)", "LSTM5 (s1-5)"), ("gss3 (s1-3)", "gs3"),
+                     ("gss6 (s1-6)", "gss3 (s1-3)"), ("LSTM5+gss6", "LSTM5 (s1-5)")], "mres_gss6")
+    elif which == "missing":
+        M = Path(R) / "missing_forcing"
+        lstm = [run_dir("lstm_mres", k) for k in range(1, 6)]
+        gss = [run_dir("convcnp_gss_mres", k) for k in range(1, 7)]
+        cond = lambda dirs, fill, p: [M / d.name / f"{fill}_p{p:02d}" for d in dirs]
+        rows, comps = {"LSTM5 clean": ens(lstm), "gss6 clean": ens(gss)}, [("gss6 clean", "LSTM5 clean")]
+        for p in (10, 30, 50):
+            rows[f"LSTM5 ffill p{p}"] = ens(cond(lstm, "ffill", p))
+            rows[f"gss6 nan p{p}"] = ens(cond(gss, "nan", p))
+            rows[f"gss6 ffill p{p}"] = ens(cond(gss, "ffill", p))
+            comps += [(f"gss6 nan p{p}", f"LSTM5 ffill p{p}"), (f"gss6 ffill p{p}", f"LSTM5 ffill p{p}"),
+                      (f"gss6 nan p{p}", f"gss6 ffill p{p}")]
+        table(rows, comps, "missing_forcing")
     else:
         sys.exit(__doc__)
 
