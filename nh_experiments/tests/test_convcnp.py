@@ -303,3 +303,47 @@ def test_window_alpha_penalty():
     yh = (0.5 * y).requires_grad_()
     window_alpha_penalty(yh, y).backward()
     assert torch.isfinite(yh.grad).all()
+
+
+def test_local_blocks_receptive_field_and_causality():
+    m = ConvCNP(make_cfg(convcnp={"local_blocks": 2, "init_length_scale": 1000.0})).eval().double()
+    m0 = ConvCNP(make_cfg())
+    assert len(m.blocks) == len(m0.blocks) + 2
+    assert m.receptive_field == m0.receptive_field + 2 * 2 * (3 - 1)
+    rf, t = m.receptive_field, 199
+    def batch():
+        b = make_batch()
+        return {"x_d": {k: v.double() for k, v in b["x_d"].items()}, "x_s": b["x_s"].double()}
+    with torch.no_grad():
+        base = m(batch())["y_hat"][:, t]
+        b_out = batch(); b_out["x_d"]["prcp(mm/day)"][:, t - rf] += 100.0
+        b_in = batch(); b_in["x_d"]["prcp(mm/day)"][:, t - rf + 1] += 100.0
+        assert (m(b_out)["y_hat"][:, t] - base).abs().max() < 1e-12
+        assert (m(b_in)["y_hat"][:, t] - base).abs().max() > 1e-10
+
+
+def test_window_peak_penalty():
+    from convcnp_nh import window_peak_penalty
+    torch.manual_seed(0)
+    y = torch.rand(3, 100, 1); stds = torch.ones_like(y)
+    assert window_peak_penalty(y.clone(), y, stds, eps=0.0).item() < 1e-12
+    # error only on the low flows -> no peak penalty; error on the top 5% -> penalty
+    low = y.clone(); low[y < 0.5] += 1.0
+    assert window_peak_penalty(low, y, stds, eps=0.0).item() < 1e-12
+    high = y.clone(); high[y >= torch.quantile(y.squeeze(-1), 0.95, dim=1, keepdim=True).unsqueeze(-1)] -= 0.5
+    assert abs(window_peak_penalty(high, y, stds, eps=0.0).item() - 0.25) < 1e-6
+    y2 = y.clone(); y2[:, :80] = float("nan")                 # <30 valid -> ignored, NaNs tolerated
+    assert window_peak_penalty(high, y2, stds).item() == 0.0
+
+
+def test_nse_loss_extra_terms_and_warmup():
+    from neuralhydrology.training import get_loss_obj
+    y = torch.rand(2, 365, 1); stds = torch.ones_like(y)
+    pred, gt = {"y_hat": 0.5 * y}, {"y": y, "per_basin_target_stds": stds}
+    base = get_loss_obj(make_cfg(loss="NSE", predict_last_n=365, seq_length=400))(pred, gt)[0].item()
+    L = get_loss_obj(make_cfg(loss="NSE", predict_last_n=365, seq_length=400, peak_loss_weight=1.0,
+                              loss_warmup_updates=2))
+    vals = [L(pred, gt)[0].item() for _ in range(3)]
+    assert abs(vals[0] - base) < 1e-7 and abs(vals[1] - base) < 1e-7 and vals[2] > base + 1e-4
+    with torch.no_grad():                                      # validation: extra terms on, no counting
+        assert L(pred, gt)[0].item() > base + 1e-4
