@@ -107,7 +107,9 @@ def _dry_run(cfg: Config):
     keys = ["experiment_name", "model", "head", "loss", "seed", "device", "seq_length", "predict_last_n",
             "batch_size", "epochs", "max_updates_per_epoch", "learning_rate", "train_start_date", "train_end_date",
             "test_start_date", "test_end_date", "data_dir", "run_dir", "output_dropout", "output_activation",
-            "weight_decay", "ema_decay", "alpha_loss_weight", "peak_loss_weight", "loss_warmup_updates"]
+            "weight_decay", "ema_decay", "alpha_loss_weight", "peak_loss_weight", "loss_warmup_updates",
+            "forcings", "nan_handling_method", "nan_step_probability", "nan_sequence_probability",
+            "nan_handling_pos_encoding_size", "dynamics_embedding"]
     for k in keys:
         try:
             print(f"  {k:24s} {getattr(cfg, k)}")

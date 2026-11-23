@@ -120,7 +120,30 @@ CONVCNP_GS_CMAL = dict(CONVCNP_GS, head="cmal", n_distributions=3, loss="CMALLos
                        n_samples=100, negative_sample_handling="clip", mc_dropout=False)
 CONVCNP_GS_CMAL.pop("output_activation")
 
+# --- Missing inputs (Gauch et al. 2025, HESS 29, 6221-6235, "How to deal w___ missing input data") ---------
+# Three forcing products as feature groups (Kratzert et al. 2021 / Gauch et al. 2025), Kratzert 2019 periods
+# (train WY2000-08, validation WY1981-89, test WY1990-99), and the paper's training-time missing-data
+# simulation p_time = p_sequence = 0.1 per group (their tuning / experiment-2 setting). The LSTM blocks are the
+# paper's best configurations (Table A2): masked mean -- ReLU embedding [10, 10, 10, 10], no positional
+# encoding, 35 epochs; input replacing -- ReLU embedding [17, 10], positional encoding 5, 30 epochs.
+MULTI = dict(
+    forcings=["daymet", "maurer_extended", "nldas_extended"],
+    dynamic_inputs=[
+        [f"{v}_daymet" for v in DYNAMIC],
+        [f"{v}_maurer_extended" for v in DYNAMIC],
+        [f"{v}_nldas_extended" for v in ["PRCP(mm/day)", "SRAD(W/m2)", "Tmax(C)", "Tmin(C)", "Vp(Pa)"]],
+    ],
+    nan_step_probability=0.1, nan_sequence_probability=0.1,
+)
+LSTM_MM = dict(LSTM, nan_handling_method="masked_mean", epochs=35,
+               dynamics_embedding=dict(type="fc", hiddens=[10, 10, 10, 10], activation="relu", dropout=0.0))
+LSTM_IR = dict(LSTM, nan_handling_method="input_replacing", nan_handling_pos_encoding_size=5, epochs=30,
+               dynamics_embedding=dict(type="fc", hiddens=[17, 10], activation="relu", dropout=0.0))
+
 EXPERIMENTS = {
+    "lstm_mm_multi": (LSTM_MM, "kratzert2019", MULTI),
+    "lstm_ir_multi": (LSTM_IR, "kratzert2019", MULTI),
+    "convcnp_gss_multi": (CONVCNP_GSS, "kratzert2019", MULTI),
     "lstm_kratzert2019": (LSTM, "kratzert2019"),
     "convcnp_kratzert2019": (CONVCNP, "kratzert2019"),
     "lstm_mres": (LSTM, "mres"),
