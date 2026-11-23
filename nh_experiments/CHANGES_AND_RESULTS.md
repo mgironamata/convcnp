@@ -217,17 +217,69 @@ Paired by basin:
 
 There is no 5- or 6-seed LSTM PUB control, so the PUB mixed result is partly an ensemble-size effect, as it was in the gauged setting.
 
-### 3.3 Overall verdict
+### 3.4 Gauged `gss`, 6 seeds (2026-11-23)
+
+Source: `convcnp_runs/mres_gss6_{summary,paired}.csv` (`scripts/ensemble_report.py gss6`). Queue: `convcnp_runs/mres_queue_gss6.sh`.
+
+| model | median NSE | mean NSE | NSE < 0 | KGE | Alpha | FHV | FLV |
+|---|---|---|---|---|---|---|---|
+| `gss` seeds 1–6 | 0.726 / 0.723 / 0.725 / 0.721 / 0.726 / 0.715 | 0.67–0.68 | 3–5 | 0.76 | 0.87–0.91 | −9 to −13 | +21 to +26 |
+| `gss` ensemble (3) | 0.750 | 0.708 | 2 | 0.771 | 0.867 | −13.2 | +32.6 |
+| `gss` ensemble (6) | 0.757 | 0.713 | 2 | 0.770 | 0.875 | −12.5 | +34.3 |
+| `gs` ensemble (3) | 0.752 | 0.709 | 2 | 0.771 | 0.875 | −12.5 | +28.7 |
+| LSTM ensemble (3) | 0.764 | 0.719 | 3 | 0.792 | 0.941 | −5.7 | +11.1 |
+| LSTM ensemble (5) | 0.772 | 0.724 | 2 | 0.795 | 0.936 | −5.6 | +17.6 |
+| LSTM 5 + `gss` 6 (mixed) | **0.777** | **0.735** | 2 | 0.793 | 0.898 | −9.8 | +31.1 |
+
+| comparison | wins | median difference | p |
+|---|---|---|---|
+| `gss` 6 vs LSTM 3 | 38.6% | −0.009 | 2e-5 |
+| `gss` 6 vs LSTM 5 | 32.6% | −0.013 | 5e-13 |
+| `gss` 3 vs `gs` 3 | 50.5% | 0.000 | 0.75 |
+| `gss` 6 vs `gss` 3 | 70.1% | +0.005 | 2e-23 |
+| mixed vs LSTM 5 | 61.0% | +0.005 | 7e-12 |
+
+- **The success test failed:** 6 ConvCNP seeds (0.757) do not reach 3 LSTM seeds (0.764). Extra seeds do not remove the over-smoothing (Alpha stays at 0.875).
+- **`gss` = `gs` on the gauged test**, as expected, since `head_bias_init` only prevents dead starts. All 6 seeds were healthy.
+- **Compute:** 5 seeds in parallel took 2 h 03 wall on GPU 0, and seed 6 alone 34 min.
+
+### 3.5 Missing forcings, evaluation only (2026-11-23)
+
+`scripts/eval_missing_forcings.py`. For every basin, each day's forcings (all dynamic inputs) are hidden independently with probability p, in the raw data before normalisation; discharge and attributes are untouched. Every model sees the same hidden days (mask seed 0). The models were **not** trained with gaps.
+- `ffill`: gaps filled with the last observed value. The LSTM needs this.
+- `nan`: gaps left missing, handled by the ConvCNP's density channel.
+
+Ensembles: LSTM seeds 1–5, `gss` seeds 1–6. Source: `convcnp_runs/missing_forcing_{summary,paired}.csv` (`scripts/ensemble_report.py missing`).
+
+| hidden days | LSTM 5, ffill | `gss` 6, ffill | `gss` 6, nan | NSE < 0 (LSTM / `gss` ffill / `gss` nan) |
+|---|---|---|---|---|
+| 0% | **0.772** | 0.757 | — | 2 / 2 / — |
+| 10% | **0.657** | 0.653 | 0.634 | 8 / 7 / 7 |
+| 30% | 0.347 | **0.395** | 0.315 | 100 / 61 / 94 |
+| 50% | −0.096 | **0.057** | 0.018 | 310 / 228 / 249 |
+
+| comparison | 10% | 30% | 50% |
+|---|---|---|---|
+| `gss` ffill vs LSTM ffill: wins, median diff, p | 47.6%, −0.002, 0.41 | **68.0%, +0.027, 5e-26** | **77.6%, +0.077, 5e-44** |
+| `gss` nan vs LSTM ffill | 37.3%, −0.016, 5e-8 | 41.2%, −0.026, 1e-4 | 55.7%, +0.046, 0.001 |
+| `gss` nan vs `gss` ffill | 28.4%, −0.017 | 25.8%, −0.067 | 41.4%, −0.046 |
+
+- **The ConvCNP degrades more gracefully than the LSTM.** With the same filled inputs it is level at 10% hidden and clearly better at 30% and 50%, with fewer failing basins. By the plan's criterion (better at ≥ 30% missing with a clear paired win rate) this is a pass, but only with filled inputs.
+- **The density channel does not help without training on gaps.** Leaving gaps as NaN is worse than filling them at every level, because the density values are then far outside anything seen in training. This is the fair caveat to the "native missing-data handling" argument: it needs training with input dropout (the retraining step, about 15 GPU-h, not approved yet).
+- **Absolute skill collapses for both models** from 30% hidden days, so neither is usable there without training on gaps.
+- **Compute:** the 17 evaluation jobs (5 at a time) took 6 h 40 wall (14:26–21:06Z), far more than the 2 GPU-h I estimated. Evaluation is dominated by CPU data loading, repeated for each condition.
+
+### 3.6 Overall verdict
 
 - **Like for like (same number of seeds):** the LSTM wins on median NSE by about 0.012 (gauged) and 0.015 (PUB). It is better in about 60–65% of basins. The gap is the over-smoothing: ConvCNP Alpha is 0.85–0.88 against 0.91–0.94, and FHV is about −13 against −6 to −8.
 - **Where the ConvCNP is better:** the tail. It has a higher mean NSE in PUB and fewer basins below 0. No dead runs since the fix, while one LSTM seed in six diverged. And training is 5–10× cheaper.
-- **Mixing the two models gives the best numbers anywhere:** 0.774 gauged, 0.696 PUB. Against the fairest control (5 LSTM seeds), the true mixing gain is small but significant: +0.0035 per basin, 61% wins.
+- **Mixing the two models gives the best numbers anywhere:** 0.777 gauged (LSTM 5 + `gss` 6), 0.696 PUB. Against the fairest control (5 LSTM seeds), the true mixing gain is small but significant: +0.0035 to +0.005 per basin, 61% wins.
+- **With missing forcings (not trained on gaps), the ConvCNP is the more robust model** once 30% or more of the days are hidden, but only with filled inputs; its density channel needs training with gaps to pay off.
 
 ---
 
 ## 4. Not run (configs exist, no runs)
 
-- `convcnp_gss_mres` (gauged `gss`)
 - `convcnp_gs_kratzert2019`, `convcnp_kratzert2019`
 - `convcnp_cmal_mres`, `convcnp_gs_cmal_mres`
 - `sharp` on the MRes test or PUB
@@ -235,9 +287,10 @@ There is no 5- or 6-seed LSTM PUB control, so the PUB mixed result is partly an 
 ## 5. Next steps
 
 See the plan in the 2026-11-23 report (`/scratch2/mg963/agent-coordinator/inbox/2026-11-23-convcnp-landau.md`). In short:
-1. A compute-matched gauged `gss` run with 6+ seeds.
-2. A missing-forcing robustness test, where the ConvCNP's density channel should give it a real advantage.
-3. A clean extra LSTM seed.
+1. ~~A compute-matched gauged `gss` run with 6+ seeds.~~ Done (section 3.4): failed its success test.
+2. ~~A missing-forcing robustness test, evaluation only.~~ Done (section 3.5): the ConvCNP degrades more gracefully with filled inputs; the density channel needs training with gaps.
+3. Next, if approved: retrain both models with input dropout (about 15 GPU-h) to test the density channel fairly.
+4. A clean extra LSTM seed.
 
 The plain-simulation gap is unlikely to close with reasonable effort.
 
@@ -248,7 +301,7 @@ The plain-simulation gap is unlikely to close with reasonable effort.
 | Review of the 2020 code | `REVIEW.md` |
 | Model / patches / losses | `nh_experiments/convcnp_nh/{model.py,__init__.py}` |
 | Configs (generated) | `nh_experiments/scripts/make_configs.py` → `nh_experiments/configs/` |
-| Tests (23, CPU) | `nh_experiments/tests/test_convcnp.py` |
-| Run summaries | `convcnp_runs/{summary_final_mres,pub_lstm3_vs_gss3_summary,mres_mixed_control_*,pub_mixed_*,pilots_LMN_seed1_*}.csv` |
-| Summary scripts | `nh_experiments/scripts/{summarize,pub_report,ensemble_report,tune_report}.py` |
+| Tests (24, CPU) | `nh_experiments/tests/test_convcnp.py` |
+| Run summaries | `convcnp_runs/{summary_final_mres,pub_lstm3_vs_gss3_summary,mres_mixed_control_*,pub_mixed_*,pilots_LMN_seed1_*,mres_gss6_*,missing_forcing_*}.csv` |
+| Summary scripts | `nh_experiments/scripts/{summarize,pub_report,ensemble_report,tune_report,eval_missing_forcings}.py` |
 | Queues and logs | `convcnp_runs/*queue*.sh`, `convcnp_runs/logs/` |

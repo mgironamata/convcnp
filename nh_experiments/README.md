@@ -193,3 +193,9 @@ Baseline: `gss`, seeds 1/2/3 = 0.726/0.726/0.723, 3-seed ensemble 0.753. LSTM re
 - **Local blocks are neutral.**
 
 **Conclusion:** no loss or architecture change tried so far moves the ConvCNP's NSE–Alpha trade-off. The best ConvCNP is still `gss` or `sharp`.
+
+## Gauged `gss` 6 seeds and missing forcings, 2026-11-23
+
+Details: `CHANGES_AND_RESULTS.md` sections 3.4 and 3.5.
+- **`gss` 6 seeds, gauged MRes:** median NSE 0.757, below LSTM 3 seeds (0.764) and 5 seeds (0.772). Still over-smoothed (Alpha 0.875). LSTM 5 + `gss` 6 mixed: 0.777.
+- **Missing forcings, evaluation only** (`scripts/eval_missing_forcings.py`; models not trained with gaps). Median NSE, LSTM 5 vs `gss` 6, both with forward-filled gaps: 10% hidden 0.657 vs 0.653; 30% 0.347 vs 0.395 (`gss` better in 68% of basins); 50% −0.096 vs 0.057 (78%). Leaving gaps as NaN for the ConvCNP's density channel is worse than filling at every level, so that needs training with gaps.
