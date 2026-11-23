@@ -2,6 +2,8 @@
 
 Head-to-head comparison of an LSTM baseline with a rewritten ConvCNP. Both models use the same data pipeline, the same evaluation protocol and the same metric code (`neuralhydrology` 1.13.0). The ConvCNP plugs into neuralhydrology as a custom model (`convcnp_nh/`) and fixes the problems listed in `../REVIEW.md`.
 
+For the full story (every change since 2020, everything tried and dropped, and the complete LSTM comparison), see [`CHANGES_AND_RESULTS.md`](CHANGES_AND_RESULTS.md).
+
 ## Layout
 
 | path | what |
@@ -159,3 +161,35 @@ MRes split, test WY1996–2010, 531 basins, Daymet. Summary CSV: `/scratch2/mg96
 Paired by basin, the ConvCNP ensemble beats the LSTM ensemble in 40.7% of basins. The median per-basin difference is −0.014 (Wilcoxon p = 0.003). The LSTM therefore still wins on median NSE, by about the same margin as in the gauged setting. The ConvCNP is more robust in the tail: higher mean NSE and fewer failing basins.
 
 **Stability note.** The tuned `gs` configuration had 3 of 15 PUB runs dead from epoch 1 (training loss stuck at about 0.1, constant output). `head_bias_init=1.0` fixed it: all 15 runs were healthy. Use the `gss` configs from now on.
+
+## Over-smoothing pilots, 2026-11-20 (tuning split)
+
+Baseline: `gss`, seeds 1/2/3 = 0.726/0.726/0.723, 3-seed ensemble 0.753. LSTM reference, single seed: 0.760. Logs: `convcnp_runs/logs/tune_L_*`.
+
+- **`sharp`** (`decoder_scales [0.25]`, i.e. no 2-day read-out kernel). Seeds 0.736/0.737/0.725, ensemble 0.760.
+  - The gain is +0.003 to +0.004 per basin for every seed, with win rates of 52–55% (ensemble p = 0.08).
+  - Alpha is about +0.01 and FHV about +1.5.
+  - The gain is small and consistent, but not significant.
+- **`lowdrop`** (dropout 0.1 / 0.1): 0.707. Hurts.
+- **`alpha_loss_weight` 0.3 / 1.0**: 0.697 / 0.636.
+  - Alpha rises to 0.90 / 0.95 and FHV to −11.7 / −8.2, matching the LSTM.
+  - But FLV drops to −26 / −64: the variance is inflated everywhere, not only at the peaks.
+- **`alpha_loss_weight` 0.1**: dead start (constant output; the variance term has zero gradient at a flat output). Inconclusive.
+- **Seed noise:** single-seed median NSE varies by about ±0.015 between configurations that are practically identical (`gs` vs `gss`, seed 1: 0.742 vs 0.726).
+- **Mixed ensemble (PUB, no new training):** LSTM3 + ConvCNP3 gives median NSE 0.696, mean 0.537 and 29 basins with NSE < 0, against LSTM3 at 0.679.
+
+**Batch N** (seed 1, compared with `gss` seed 1). The loss terms switch on after a 500-step warm-up on plain NSE\*.
+
+| variant | median NSE | Alpha | FHV | FLV | basins better than `gss` |
+|---|---|---|---|---|---|
+| `peak_loss_weight` 0.5 (top 5% of flows per window) | 0.689 | 0.93 | −10.8 | −36 | 26% |
+| `peak_loss_weight` 2.0 | 0.643 | 0.96 | −11.2 | −57 | 13% |
+| `local_blocks` 2 | 0.732 | 0.87 | −14.7 | +4 | 48% |
+| `local_blocks` 2 + `sharp` | 0.731 | 0.88 | −13.6 | +7 | 51% |
+| `alpha_loss_weight` 0.1 + warm-up | 0.726 | 0.88 | −14.3 | −14 | 43% |
+
+- **Warm-up fixes the dead start.**
+- **Peak weighting behaves like the variance loss:** Alpha reaches the LSTM's level, but median NSE and low flows (FLV) degrade.
+- **Local blocks are neutral.**
+
+**Conclusion:** no loss or architecture change tried so far moves the ConvCNP's NSE–Alpha trade-off. The best ConvCNP is still `gss` or `sharp`.
