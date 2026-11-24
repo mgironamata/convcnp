@@ -135,6 +135,10 @@ MULTI = dict(
     ],
     nan_step_probability=0.1, nan_sequence_probability=0.1,
 )
+# Single-product variant (Daymet only, one feature group). With one group neuralhydrology never drops the whole
+# sequence (it keeps at least one group), so only p_time = 0.1 random days act; identical for both models.
+DAYMET_NAN = dict(forcings=["daymet"], dynamic_inputs=[list(DYNAMIC)],
+                  nan_step_probability=0.1, nan_sequence_probability=0.1)
 LSTM_MM = dict(LSTM, nan_handling_method="masked_mean", epochs=35,
                dynamics_embedding=dict(type="fc", hiddens=[10, 10, 10, 10], activation="relu", dropout=0.0))
 LSTM_IR = dict(LSTM, nan_handling_method="input_replacing", nan_handling_pos_encoding_size=5, epochs=30,
@@ -144,6 +148,8 @@ EXPERIMENTS = {
     "lstm_mm_multi": (LSTM_MM, "kratzert2019", MULTI),
     "lstm_ir_multi": (LSTM_IR, "kratzert2019", MULTI),
     "convcnp_gss_multi": (CONVCNP_GSS, "kratzert2019", MULTI),
+    "lstm_ir_daymet": (LSTM_IR, "kratzert2019", DAYMET_NAN),
+    "convcnp_gss_daymet": (CONVCNP_GSS, "kratzert2019", DAYMET_NAN),
     "lstm_kratzert2019": (LSTM, "kratzert2019"),
     "convcnp_kratzert2019": (CONVCNP, "kratzert2019"),
     "lstm_mres": (LSTM, "mres"),

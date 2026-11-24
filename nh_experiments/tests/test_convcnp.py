@@ -414,3 +414,19 @@ def test_scenario_masks():
     with pytest.raises(ValueError):
         group_masks(n, "b", "keep_daymet", 1, [None])
     assert len(SCENARIOS) == 13
+
+
+def test_gap_scenario_masks():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import numpy as np
+    from eval_missing_scenarios import GAP_MEAN_DAYS, SCENARIOS_SINGLE, group_masks
+    n = 200000
+    for p in (10, 30, 50):
+        m = group_masks(n, "b", f"gap_p{p}", 1, [None])[0]
+        assert abs(m.mean() - p / 100) < 0.02
+        starts = np.flatnonzero(m[1:] & ~m[:-1])
+        assert abs(m.sum() / len(starts) - GAP_MEAN_DAYS) < 0.5     # mean gap length
+    two = group_masks(1000, "b", "gap_p30", 2, [None, None])
+    assert (two[0] == two[1]).all()
+    assert (group_masks(1000, "b", "gap_p30", 1, [None]) == group_masks(1000, "b", "gap_p30", 1, [None])).all()
+    assert SCENARIOS_SINGLE == ["clean", "indep_p10", "indep_p30", "indep_p50", "gap_p10", "gap_p30", "gap_p50"]

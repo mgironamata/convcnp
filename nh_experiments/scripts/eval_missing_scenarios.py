@@ -13,6 +13,8 @@ Scenarios (``SCENARIOS``):
   indep_pXX          each product is missing on a day independently with probability XX%
                      (Gauch et al. 2025, experiment 1, but with a fixed mask instead of a fresh draw per window)
   allday_pXX         all products missing together on XX% of days (no forcing at all on those days)
+  gap_pXX            all products missing together in contiguous gaps covering XX% of days on average; gap
+                     lengths are geometric with mean GAP_MEAN_DAYS (two-state Markov chain, stationary start)
   keep_<products>    the other products are missing for the whole period (experiment 2)
 
 ConvCNP runs are evaluated in one causal pass over each basin's full series (``--fast-convcnp``, default
@@ -48,6 +50,9 @@ PRODUCTS = ("daymet", "maurer", "nldas")
 SCENARIOS = (["clean"] + [f"indep_p{p}" for p in (10, 30, 50)] + [f"allday_p{p}" for p in (10, 30, 50)]
              + ["keep_daymet", "keep_maurer", "keep_nldas",
                 "keep_daymet_maurer", "keep_daymet_nldas", "keep_maurer_nldas"])
+# single-product runs (one feature group): indep == allday, so random days vs contiguous gaps
+SCENARIOS_SINGLE = ["clean"] + [f"indep_p{p}" for p in (10, 30, 50)] + [f"gap_p{p}" for p in (10, 30, 50)]
+GAP_MEAN_DAYS = 10
 STATE = {"scenario": "clean", "groups": None, "mask_seed": 0}
 
 
@@ -74,6 +79,17 @@ def group_masks(n_days: int, basin: str, scenario: str, n_groups: int, group_pro
     elif kind == "allday":
         p = int(arg[1:]) / 100
         hidden[:] = rng.random(n_days) < p
+    elif kind == "gap":
+        p, L = int(arg[1:]) / 100, GAP_MEAN_DAYS
+        p_start, p_end = p / (L * (1 - p)), 1 / L
+        u = rng.random(n_days)
+        miss = np.empty(n_days, dtype=bool)
+        state = u[0] < p
+        for t in range(n_days):
+            if t:
+                state = (u[t] >= p_end) if state else (u[t] < p_start)
+            miss[t] = state
+        hidden[:] = miss
     elif kind == "keep":
         keep = set(arg.split("_"))
         if not keep <= set(PRODUCTS) or None in group_products:
