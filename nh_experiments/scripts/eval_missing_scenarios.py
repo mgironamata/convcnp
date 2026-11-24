@@ -168,6 +168,8 @@ def main():
             fast = cfg.model.lower() == "convcnp" and not args.no_fast_convcnp
             nh_tester.BaseTester._evaluate = _fast_convcnp_evaluate if fast else original_evaluate
             start_evaluation(cfg=cfg, run_dir=d, epoch=None, period="test")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()     # release cached blocks so a shared GPU sees the real footprint
             print(f"[scenarios] evaluated {d}{' (fast)' if fast else ''}", flush=True)
 
 
