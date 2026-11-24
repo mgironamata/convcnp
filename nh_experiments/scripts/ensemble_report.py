@@ -6,6 +6,8 @@
   python nh_experiments/scripts/ensemble_report.py pilots # tuning-split pilots (batches L, M, N) vs gss seed 1
   python nh_experiments/scripts/ensemble_report.py gss6   # gauged MRes: gss 6 seeds vs LSTM3/LSTM5, gs3
   python nh_experiments/scripts/ensemble_report.py missing # forcing days hidden (eval_missing_forcings.py)
+  python nh_experiments/scripts/ensemble_report.py scenarios # missing-input retraining (eval_missing_scenarios.py):
+                                                             # gss / LSTM masked mean / LSTM input replacing, 3 seeds
 
 Ensembles average the members' simulated series and recompute the metrics (summarize.ensemble_metrics).
 """
@@ -99,6 +101,22 @@ def main(which):
             comps += [(f"gss6 nan p{p}", f"LSTM5 ffill p{p}"), (f"gss6 ffill p{p}", f"LSTM5 ffill p{p}"),
                       (f"gss6 nan p{p}", f"gss6 ffill p{p}")]
         table(rows, comps, "missing_forcing")
+    elif which == "scenarios":
+        S = Path(R) / "missing_scenarios"
+        scen = (["clean"] + [f"indep_p{p}" for p in (10, 30, 50)] + [f"allday_p{p}" for p in (10, 30, 50)]
+                + ["keep_daymet", "keep_maurer", "keep_nldas", "keep_daymet_maurer", "keep_daymet_nldas",
+                   "keep_maurer_nldas"])
+        models = {"gss": "convcnp_gss_multi", "LSTM-MM": "lstm_mm_multi", "LSTM-IR": "lstm_ir_multi"}
+        rows, comps, grid = {}, [], {}
+        for sc in scen:
+            for m, cfg in models.items():
+                rows[f"{m} {sc}"] = ens([S / run_dir(cfg, k).name / sc for k in (1, 2, 3)])
+                grid.setdefault(m, {})[sc] = rows[f"{m} {sc}"].NSE.median()
+            comps += [(f"gss {sc}", f"LSTM-MM {sc}"), (f"gss {sc}", f"LSTM-IR {sc}"), (f"LSTM-IR {sc}", f"LSTM-MM {sc}")]
+        g = pd.DataFrame(grid)
+        print("median NSE, 3-seed ensembles\n", g.round(3).to_string())
+        g.to_csv(f"{R}/missing_scenarios_median_nse.csv")
+        table(rows, comps, "missing_scenarios")
     else:
         sys.exit(__doc__)
 
