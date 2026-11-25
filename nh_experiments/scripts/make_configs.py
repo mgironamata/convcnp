@@ -150,6 +150,9 @@ EXPERIMENTS = {
     "convcnp_gss_multi": (CONVCNP_GSS, "kratzert2019", MULTI),
     "lstm_ir_daymet": (LSTM_IR, "kratzert2019", DAYMET_NAN),
     "convcnp_gss_daymet": (CONVCNP_GSS, "kratzert2019", DAYMET_NAN),
+    # control: identical to convcnp_gss_daymet but without training-time masking
+    "convcnp_gss_daymet_nomask": (CONVCNP_GSS, "kratzert2019",
+                                  dict(DAYMET_NAN, nan_step_probability=0.0, nan_sequence_probability=0.0)),
     "lstm_kratzert2019": (LSTM, "kratzert2019"),
     "convcnp_kratzert2019": (CONVCNP, "kratzert2019"),
     "lstm_mres": (LSTM, "mres"),
