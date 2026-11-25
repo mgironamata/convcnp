@@ -8,6 +8,7 @@
   python nh_experiments/scripts/ensemble_report.py missing # forcing days hidden (eval_missing_forcings.py)
   python nh_experiments/scripts/ensemble_report.py scenarios # missing-input retraining (eval_missing_scenarios.py):
                                                              # gss / LSTM masked mean / LSTM input replacing, 3 seeds
+  python nh_experiments/scripts/ensemble_report.py daymet  # Daymet-only missing data: gss vs LSTM input replacing
 
 Ensembles average the members' simulated series and recompute the metrics (summarize.ensemble_metrics).
 """
@@ -101,22 +102,29 @@ def main(which):
             comps += [(f"gss6 nan p{p}", f"LSTM5 ffill p{p}"), (f"gss6 ffill p{p}", f"LSTM5 ffill p{p}"),
                       (f"gss6 nan p{p}", f"gss6 ffill p{p}")]
         table(rows, comps, "missing_forcing")
-    elif which == "scenarios":
+    elif which in ("scenarios", "daymet"):
         S = Path(R) / "missing_scenarios"
-        scen = (["clean"] + [f"indep_p{p}" for p in (10, 30, 50)] + [f"allday_p{p}" for p in (10, 30, 50)]
+        scen = (["clean", "indep_p10", "indep_p30", "indep_p50", "gap_p10", "gap_p30", "gap_p50"] if which == "daymet" else
+                ["clean"] + [f"indep_p{p}" for p in (10, 30, 50)] + [f"allday_p{p}" for p in (10, 30, 50)]
                 + ["keep_daymet", "keep_maurer", "keep_nldas", "keep_daymet_maurer", "keep_daymet_nldas",
                    "keep_maurer_nldas"])
-        models = {"gss": "convcnp_gss_multi", "LSTM-MM": "lstm_mm_multi", "LSTM-IR": "lstm_ir_multi"}
-        rows, comps, grid = {}, [], {}
+        models = ({"gss": "convcnp_gss_daymet", "LSTM-IR": "lstm_ir_daymet"} if which == "daymet" else
+                  {"gss": "convcnp_gss_multi", "LSTM-MM": "lstm_mm_multi", "LSTM-IR": "lstm_ir_multi"})
+        out = "missing_daymet" if which == "daymet" else "missing_scenarios"
+        rows, comps, grid, seedmean = {}, [], {}, {}
         for sc in scen:
             for m, cfg in models.items():
                 rows[f"{m} {sc}"] = ens([S / run_dir(cfg, k).name / sc for k in (1, 2, 3)])
                 grid.setdefault(m, {})[sc] = rows[f"{m} {sc}"].NSE.median()
-            comps += [(f"gss {sc}", f"LSTM-MM {sc}"), (f"gss {sc}", f"LSTM-IR {sc}"), (f"LSTM-IR {sc}", f"LSTM-MM {sc}")]
-        g = pd.DataFrame(grid)
+                seedmean.setdefault(m, {})[sc] = np.mean([single(S / run_dir(cfg, k).name / sc).NSE.median()
+                                                          for k in (1, 2, 3)])
+            comps += [(f"gss {sc}", f"LSTM-IR {sc}")] if which == "daymet" else \
+                [(f"gss {sc}", f"LSTM-MM {sc}"), (f"gss {sc}", f"LSTM-IR {sc}"), (f"LSTM-IR {sc}", f"LSTM-MM {sc}")]
+        g, sm = pd.DataFrame(grid), pd.DataFrame(seedmean)
         print("median NSE, 3-seed ensembles\n", g.round(3).to_string())
-        g.to_csv(f"{R}/missing_scenarios_median_nse.csv")
-        table(rows, comps, "missing_scenarios")
+        print("median NSE, mean of single seeds\n", sm.round(3).to_string())
+        g.to_csv(f"{R}/{out}_median_nse.csv"); sm.to_csv(f"{R}/{out}_seedmean_median_nse.csv")
+        table(rows, comps, out)
     else:
         sys.exit(__doc__)
 
