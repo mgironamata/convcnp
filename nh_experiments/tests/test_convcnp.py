@@ -471,3 +471,68 @@ def test_qhold_masks_and_sampler():
     assert np.isnan(out).sum() == ems.qhold_mask(5000, "b", "qhold_p50").sum() and not np.isnan(x).any()
     ems.STATE["scenario"] = "clean"
     assert ems._qhold_sampler(x, 0.5, 5) is x
+
+
+def test_gap_training_hook_hides_q_and_scores_only_hidden_central_days():
+    q = "QObs(mm/d)_shift0"
+    cfg = make_cfg(lagged_features={"QObs(mm/d)": [0]}, autoregressive_inputs=[q], predict_last_n=150,
+                   convcnp={"causal": False, "gap_inputs": [q], "gap_len_range": [1, 40], "gap_count_range": [2, 4]})
+    m = ConvCNP(cfg)
+    torch.manual_seed(0)
+    B, T = 64, 200
+    b = make_batch(B=B, T=T)
+    b["x_d"][q] = torch.randn(B, T, 1)
+    b["y"] = b["x_d"][q].clone()
+    assert m.pre_model_hook(b, is_train=False) is b                     # no-op outside training
+    out = m.pre_model_hook(b, is_train=True)
+    hidden = torch.isnan(out["x_d"][q][..., 0])
+    scored = torch.isfinite(out["y"][..., 0])
+    lo, hi = T - 150, 150                                                # non-causal: central [50, 150)
+    assert scored.any(dim=1).all()                                       # every sample has scored days
+    assert not (scored & ~hidden).any()                                  # only hidden days are scored
+    assert not scored[:, :lo].any() and not scored[:, hi:].any()
+    assert torch.equal(scored, hidden & (torch.arange(T) >= lo) & (torch.arange(T) < hi))
+    assert torch.isfinite(b["x_d"][q]).all() and torch.isfinite(b["y"]).all()   # caller's batch untouched
+    run = hidden.float().diff(dim=1).eq(1).sum(1) + hidden[:, 0].long()
+    assert run.max() <= 4 and hidden.sum(1).max() <= 4 * 40
+    for k in DYN:
+        assert torch.equal(out["x_d"][k], b["x_d"][k])
+    y = m(out)["y_hat"]
+    assert torch.isfinite(y).all()
+    # non-causal Q input without gap training would leak the target
+    with pytest.raises(ValueError):
+        ConvCNP(make_cfg(lagged_features={"QObs(mm/d)": [0]}, autoregressive_inputs=[q], convcnp={"causal": False}))
+    with pytest.raises(ValueError):                                      # loss region would be empty
+        ConvCNP(make_cfg(lagged_features={"QObs(mm/d)": [0]}, autoregressive_inputs=[q], predict_last_n=100,
+                         convcnp={"causal": False, "gap_inputs": [q]})).pre_model_hook(b, is_train=True)
+
+
+def test_gapfill_masks_baselines_and_metrics():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import numpy as np
+    from eval_gapfill import gap_starts, gap_mask, hide, interp, bias_correct, gap_metrics, MARGIN
+    rng = np.random.default_rng(0)
+    n = 3652
+    obs = np.exp(rng.normal(size=n)).astype(float)
+    obs[1000:1040] = np.nan
+    for L in (7, 30, 90):
+        st = gap_starts(obs, "01013500", L)
+        assert np.array_equal(st, gap_starts(obs, "01013500", L))                      # deterministic
+        assert not np.array_equal(st, gap_starts(obs, "01013500", L, mask_seed=1))
+        m = gap_mask(n, st, L)
+        assert abs(m.mean() - 0.15) < 0.02
+        for s in st:                                                                   # margins observed, no overlap
+            assert np.isfinite(obs[s - MARGIN:s]).all() and np.isfinite(obs[s + L:s + L + MARGIN]).all()
+        assert (np.diff(st) >= L + 2 * MARGIN).all()
+    st = gap_starts(obs, "x", 30)
+    qh = hide(obs, gap_mask(n, st, 30))
+    li = interp(qh)
+    s = st[0]
+    assert np.allclose(li[s:s + 30], np.linspace(obs[s - 1], obs[s + 30], 32)[1:-1])
+    assert np.allclose(interp(qh, log=True)[s - 1], obs[s - 1])
+    # bias correction: a simulation off by a constant factor is corrected exactly
+    sim = obs.copy(); sim[np.isnan(sim)] = 1.0; sim *= 2.0
+    bc = bias_correct(sim, obs, st, 30)
+    assert np.allclose(bc[s:s + 30], obs[s:s + 30], rtol=1e-3)
+    perfect = gap_metrics(obs, obs, st, 30)
+    assert perfect["NSE"] == 1 and abs(perfect["KGE"] - 1) < 1e-9 and perfect["RMSE"] == 0 and perfect["VolErr"] == 0

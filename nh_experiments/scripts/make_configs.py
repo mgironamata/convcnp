@@ -156,9 +156,24 @@ AR = dict(
 )
 AR0 = dict(AR, random_holdout_from_dynamic_features={})
 
+# --- Study B: gap-filling observed streamflow ------------------------------------------------------------------
+# Non-causal gss with observed Q at the same time step (QObs(mm/d)_shift0) as an input. Training hides 2-6 gaps per
+# window (lengths log-uniform in 1-120 days) in that input and scores only the hidden days (convcnp.gap_inputs,
+# see ConvCNP.pre_model_hook). Receptive field 537 days = +-268 around each day, so with seq_length 910 and
+# predict_last_n 642 the loss region is the central 374 days [268, 642), each with full two-sided context.
+# No forcing masking (like convcnp_gss_ar50/ar0). In-training validation is off: neuralhydrology's tester never hides
+# Q, so it would score a copy of the target (evaluation is scripts/eval_gapfill.py).
+CONVCNP_GSS_GAPFILL = dict(
+    CONVCNP_GSS, predict_last_n=642, validate_every=None,
+    convcnp=dict(CONVCNP_GSS["convcnp"], causal=False, gap_inputs=["QObs(mm/d)_shift0"],
+                 gap_len_range=[1, 120], gap_count_range=[2, 6]))
+GAPFILL = dict(AR, lagged_features={"QObs(mm/d)": [0]}, autoregressive_inputs=["QObs(mm/d)_shift0"],
+               random_holdout_from_dynamic_features={})
+
 EXPERIMENTS = {
     "convcnp_gss_ar50": (CONVCNP_GSS, "kratzert2019", AR),
     "convcnp_gss_ar0": (CONVCNP_GSS, "kratzert2019", AR0),
+    "convcnp_gss_gapfill": (CONVCNP_GSS_GAPFILL, "kratzert2019", GAPFILL),
     "lstm_mm_multi": (LSTM_MM, "kratzert2019", MULTI),
     "lstm_ir_multi": (LSTM_IR, "kratzert2019", MULTI),
     "convcnp_gss_multi": (CONVCNP_GSS, "kratzert2019", MULTI),

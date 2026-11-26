@@ -63,6 +63,14 @@ DEFAULTS = {
     "causal": True,
     "static_hidden": 64,         # hidden size of the static-attribute MLP (FiLM generator)
     "input_dropout": 0.0,        # prob. of hiding each (time, variable) input during training
+    # Gap filling (study B): observed streamflow at the same time step is an input (autoregressive_inputs, e.g.
+    # QObs(mm/d)_shift0, non-causal model). During training, `gap_count_range` gaps with lengths drawn
+    # log-uniformly from `gap_len_range` days are hidden in these inputs, and the loss is computed only on the
+    # hidden days within the last predict_last_n steps (targets elsewhere set to NaN), so the model cannot
+    # learn to copy its input.
+    "gap_inputs": None,          # list of x_d keys hidden in the gaps; None = off
+    "gap_len_range": [1, 120],
+    "gap_count_range": [1, 3],
 }
 
 
@@ -201,8 +209,15 @@ class ConvCNP(BaseModel):
         # Lagged observed streamflow (Nearing et al. 2022 setting): neuralhydrology appends `autoregressive_inputs`
         # (e.g. QObs(mm/d)_shift1) to x_d after sample validation, so windows with missing observations are kept.
         # Here they are ordinary input channels; missing values go through the density channel (no substitution).
-        if cfg.autoregressive_inputs and not p["causal"]:
-            raise ValueError("autoregressive_inputs need a causal ConvCNP (the lagged target would leak otherwise).")
+        if cfg.autoregressive_inputs and not p["causal"] and not p["gap_inputs"]:
+            raise ValueError("autoregressive_inputs need a causal ConvCNP (the lagged target would leak otherwise), "
+                             "or gap training (convcnp.gap_inputs), which scores only on hidden days.")
+        if p["gap_inputs"]:
+            missing = set(p["gap_inputs"]) - set(cfg.autoregressive_inputs)
+            if missing:
+                raise ValueError(f"gap_inputs must be autoregressive_inputs: {sorted(missing)}")
+            if len(cfg.target_variables) != 1:
+                raise ValueError("gap training supports a single target variable")
         self.dynamic_inputs += [c for c in cfg.autoregressive_inputs if c not in self.dynamic_inputs]
         n_dyn = len(self.dynamic_inputs)
         if cfg.evolving_attributes:
@@ -267,6 +282,38 @@ class ConvCNP(BaseModel):
         if not self.p["causal"]:
             LOGGER.warning("Non-causal ConvCNP: predictions use future forcings within the window. Not comparable "
                            "with an LSTM, and neuralhydrology evaluates each day at the window end (no future).")
+
+    # ------------------------------------------------------------------------------------------------
+    def pre_model_hook(self, data: dict, is_train: bool) -> dict:
+        if not (is_train and self.p["gap_inputs"]):
+            return data
+        y = data["y"]                                                       # [B, T, 1]
+        B, T = y.shape[0], y.shape[1]
+        lo_len, hi_len = (float(v) for v in self.p["gap_len_range"])
+        lo_n, hi_n = (int(v) for v in self.p["gap_count_range"])
+        # Loss region [lo, hi): the last predict_last_n steps; for a non-causal model also lo steps short of
+        # the window end, so every scored day has the same context on both sides as in a full-series pass.
+        lo = T - int(self.cfg.predict_last_n)
+        hi = T if self.p["causal"] else T - lo
+        if hi <= lo:
+            raise ValueError("non-causal gap training needs predict_last_n > seq_length / 2")
+        t = torch.arange(T, device=y.device)
+        hidden = torch.zeros(B, T, dtype=torch.bool, device=y.device)
+        n_gaps = torch.randint(lo_n, hi_n + 1, (B,), device=y.device)
+        for g in range(hi_n):
+            length = torch.exp(torch.empty(B, device=y.device).uniform_(math.log(lo_len), math.log(hi_len + 1)))
+            length = length.floor().clamp(min=lo_len, max=hi_len).long()
+            # the gap must overlap the loss region: start in [lo - length + 1, hi - 1]
+            start = lo - length + 1 + (torch.rand(B, device=y.device) * (hi - lo + length - 1).float()).long()
+            gap = (t[None] >= start[:, None]) & (t[None] < (start + length)[:, None]) & (g < n_gaps)[:, None]
+            hidden |= gap
+        x_d = dict(data["x_d"])
+        for k in self.p["gap_inputs"]:
+            x_d[k] = x_d[k].masked_fill(hidden[..., None], float("nan"))
+        data = dict(data, x_d=x_d)
+        scored = hidden & (t[None] >= lo) & (t[None] < hi)
+        data["y"] = y.masked_fill(~scored[..., None], float("nan"))
+        return data
 
     # ------------------------------------------------------------------------------------------------
     def forward(self, data: dict) -> Dict[str, torch.Tensor]:
