@@ -5,7 +5,7 @@
 - Observed streamflow from the day before (lag 1) is an extra input to the causal ConvCNP `gss`. Missing values go through the density channel, with no substitution or flag.
 - **gss-AR50:** half of the streamflow input hidden during training, in runs of mean 5 days (Nearing's main setting).
 - **gss-AR0:** nothing hidden during training.
-- Both are also trained with the same input masking as `convcnp_gss_multi` (p_time = p_seq = 0.1). 3 seeds each.
+- 3 seeds each. Neither is trained with forcing masking. (Correction, 10:50Z: an earlier version of this note said they were.) The no-streamflow reference gss-noQ (`convcnp_gss_multi`) *was* trained with p_time = p_seq = 0.1 forcing masking.
 - Tests: 0/25/50/75/100% of the streamflow input missing, in runs of mean 5 days. The masks are fixed per (basin, fraction) and identical for all runs.
 - On the owner's instruction, the LSTMs were not retrained. They are compared using Nearing's published values.
 
@@ -56,15 +56,15 @@ Source: `convcnp_runs/ar_*.csv`, from `ensemble_report.py ar`.
 
 ## Verdict
 
-**Lagged streamflow helps the ConvCNP as much as it helps the LSTM, or a little more.**
-- Gain on clean data (single seeds): +0.089 for AR50 and +0.108 for AR0 over gss-noQ.
-- Nearing's LSTM gains +0.076 and +0.083.
-- The ConvCNP with streamflow beats the one without in 97–98% of basins.
+**Lagged streamflow helps the ConvCNP a lot, but the measured gain is inflated.**
+- Gain on clean data (single seeds): +0.089 for AR50 and +0.108 for AR0 over gss-noQ. Nearing's LSTM gains +0.076 and +0.083.
+- But gss-noQ was trained with 10% forcing masking and the AR models were not. On Daymet, that masking cost gss about 0.04 on clean data. A like-for-like gain is therefore plausibly about +0.05 to +0.07, similar to or smaller than the LSTM's. This is inferred; we have no unmasked three-product gss-noQ.
+- The ConvCNP with streamflow beats gss-noQ in 97–98% of basins.
 
 **It does not beat the LSTM in absolute terms.**
 - gss-AR50 is about 0.03–0.035 below Nearing's AR-LSTM at 0–75% missing, and about 0.06 below at 100%.
 - gss-AR0 is about 0.016 below on clean data.
-- These gaps track the no-streamflow gap (gss-noQ 0.755 vs 0.796). On the same split, our own LSTM-IR scores 0.807 (3-seed ensemble), against 0.768 for gss.
+- No masking handicap explains these gaps: the AR models are trained exactly as in Nearing's setting, apart from the architecture. On the same split, our own LSTM-IR scores 0.807 (3-seed ensemble), against 0.768 for the masked gss-noQ.
 
 **The density channel does not stand in for training with gaps.**
 - gss-AR0 degrades much faster than Nearing's AR0 LSTM: 0.631 vs ~0.831 at 50% missing, and 0.229 vs ~0.553 at 100%.
@@ -73,14 +73,14 @@ Source: `convcnp_runs/ar_*.csv`, from `ensemble_report.py ar`.
 
 **Training with 50% hidden is the robust choice for the ConvCNP too.**
 - It costs 0.019 clean (it loses to AR0 in 77% of basins) and wins from 25% missing onwards.
-- At 100% missing it falls 0.057 below gss-noQ (Nearing's LSTM: 0.039 below its simulation model), so a separate model without streamflow is still better when there are no observations at all.
+- At 100% missing it falls 0.057 below even the masked gss-noQ (Nearing's LSTM: 0.039 below its simulation model), so a separate model without streamflow is still better when there are no observations at all.
 
 ## Comparability caveats
 
 1. **Masks:** Nearing's test masks are drawn at random; ours are fixed per basin and fraction.
 2. **Seeds:** Nearing reports single models. Our single-seed means are over 3 seeds, which spread by about ±0.003 on clean data.
 3. **Figure values:** values read off the figure carry about ±0.005.
-4. **Input masking:** our gss-AR and gss-noQ were also trained with 10% forcing masking. On Daymet this cost gss about 0.04 clean, so part of the gap to the LSTM may come from that. Nearing's LSTMs have no forcing masking.
+4. **Input masking:** gss-noQ was trained with 10% forcing masking; gss-AR50, gss-AR0 and Nearing's LSTMs were not. This handicaps gss-noQ only: on Daymet, masking cost gss about 0.04 clean. It inflates the measured gain from streamflow but does not affect the comparison of the AR models with Nearing's.
 5. **Basin-level comparison:** not possible. Nearing's per-basin results are only in a pickle (`time_split_statistics.pkl`), which we did not open.
 
 ## Code
