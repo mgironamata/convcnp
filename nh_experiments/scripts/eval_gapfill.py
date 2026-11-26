@@ -38,6 +38,8 @@ R = Path("/scratch2/mg963/convcnp_runs")
 OUT = R / "gapfill"
 BASIN_FILE = HERE.parent / "basins" / "531_basin_list.txt"
 TEST_DATES = pd.date_range("1989-10-01", "1999-09-30", freq="D")
+# model selection between ConvCNP variants uses the validation period only (WY1981-89); test is for the final report
+PERIOD_DATES = {"test": TEST_DATES, "validation": pd.date_range("1980-10-01", "1989-09-30", freq="D")}
 LENGTHS = [7, 30, 90]
 COVER = 0.15
 MARGIN = 7
@@ -117,7 +119,7 @@ def gap_metrics(sim: np.ndarray, obs: np.ndarray, starts: np.ndarray, length: in
 
 
 # ---------------------------------------------------------------------------------------------------------------
-def predict(run_dirs, gpu: int, lengths, mask_seed: int, basin_file: str | None, out: Path):
+def predict(run_dirs, gpu: int, lengths, mask_seed: int, basin_file: str | None, out: Path, period: str = "test"):
     from convcnp_nh import register
     register()
     import torch
@@ -137,19 +139,20 @@ def predict(run_dirs, gpu: int, lengths, mask_seed: int, basin_file: str | None,
         if basin_file:
             upd["test_basin_file"] = basin_file
         cfg.update_config(upd)
-        tester = get_tester(cfg=cfg, run_dir=rd, period="test", init_model=True)
+        tester = get_tester(cfg=cfg, run_dir=rd, period=period, init_model=True)
         tester._load_weights(epoch=None)
         model = tester.model.eval()
         scale = float(tester.scaler["xarray_feature_scale"][TARGET].values)
         center = float(tester.scaler["xarray_feature_center"][TARGET].values)
-        basins = [b.strip() for b in open(cfg.test_basin_file) if b.strip()]
+        basins = [b.strip() for b in open(cfg.test_basin_file if period == "test" else cfg.validation_basin_file)
+                  if b.strip()]
         res = {}
         for basin in basins:
             ds = tester._get_dataset(basin)
             dates = pd.DatetimeIndex(np.asarray(ds._dates[basin]["1D"]))
-            idx = dates.get_indexer(TEST_DATES)
+            idx = dates.get_indexer(PERIOD_DATES[period])
             if (idx < 0).any():
-                raise RuntimeError(f"{basin}: test dates missing from the dataset")
+                raise RuntimeError(f"{basin}: {period} dates missing from the dataset")
             x_d = {k: v[None].to(tester.device) for k, v in ds._x_d[basin]["1D"].items()}
             obs = ds._y[basin]["1D"][idx, 0].numpy() * scale + center
             data_base = {}
@@ -221,6 +224,12 @@ def report(lengths, mask_seed: int, out: Path):
             # the LSTM baseline's rescaling, applied identically to the ConvCNPs (ensemble simulations)
             methods["gss-gapfill + bias corr."] = bias_correct(methods["gss-gapfill"], obs, starts, L)
             methods["gss-noQ sim + bias corr."] = bias_correct(methods["gss-noQ sim"], obs, starts, L)
+            # mixed (hybrid) ensembles: fixed 50/50 average of the 3-seed ConvCNP and 3-seed LSTM-IR ensembles
+            # (no fitted weights). Labelled as hybrids; they use LSTM output.
+            for c in ("gss-gapfill", "gss-noQ sim"):
+                mix = 0.5 * (methods[c] + methods["LSTM-IR sim"])
+                methods[f"mix {c}+LSTM"] = mix
+                methods[f"mix {c}+LSTM + bias corr."] = bias_correct(mix, obs, starts, L)
             for m, s in methods.items():
                 rows.append(dict(basin=basin, length=L, method=m, **gap_metrics(s, obs, starts, L)))
     df = pd.DataFrame(rows)
@@ -236,7 +245,10 @@ def report(lengths, mask_seed: int, out: Path):
     pairs += [(f"gss-gapfill{bc}", f"LSTM-IR sim{bc}"), (f"gss-noQ sim{bc}", f"LSTM-IR sim{bc}"),
               (f"gss-gapfill{bc}", f"gss-noQ sim{bc}"), (f"gss-gapfill{bc}", "LSTM-IR sim"),
               # effect of the rescaling itself, per model
-              (f"LSTM-IR sim{bc}", "LSTM-IR sim"), (f"gss-gapfill{bc}", "gss-gapfill"), (f"gss-noQ sim{bc}", "gss-noQ sim")]
+              (f"LSTM-IR sim{bc}", "LSTM-IR sim"), (f"gss-gapfill{bc}", "gss-gapfill"), (f"gss-noQ sim{bc}", "gss-noQ sim"),
+              # hybrids vs the matched LSTM (raw vs raw, rescaled vs rescaled)
+              ("mix gss-gapfill+LSTM", "LSTM-IR sim"), (f"mix gss-gapfill+LSTM{bc}", f"LSTM-IR sim{bc}"),
+              ("mix gss-noQ sim+LSTM", "LSTM-IR sim"), (f"mix gss-noQ sim+LSTM{bc}", f"LSTM-IR sim{bc}")]
     comp = []
     for L in lengths:
         sub = df[df.length == L]
@@ -259,9 +271,39 @@ def report(lengths, mask_seed: int, out: Path):
     comp.to_csv(R / "gapfill_paired.csv", index=False)
 
 
+def score(names, lengths, mask_seed: int, out: Path):
+    """Median gap-day NSE of ConvCNP variants from their saved predictions in ``out`` (no baselines; for selection
+    on the validation period). ``names`` are experiment names; each is scored per seed and as a seed ensemble."""
+    rows = []
+    for name in names:
+        files = sorted(out.glob(f"{name}_seed*.npz"))
+        if not files:
+            raise FileNotFoundError(f"no predictions for {name} in {out}")
+        zs = [np.load(f) for f in files]
+        basins = sorted({k.split("|")[0] for k in zs[0].files})
+        for L in lengths:
+            per = {k: [] for k in ["ens"] + [f.stem.split("_seed")[1][0] for f in files]}
+            for b in basins:
+                obs = zs[0][f"{b}|obs"].astype(float)
+                st = gap_starts(obs, b, L, mask_seed)
+                if len(st) == 0:
+                    continue
+                arr = [z[f"{b}|{L}"].astype(float) for z in zs]
+                per["ens"].append(gap_metrics(np.mean(arr, axis=0), obs, st, L)["NSE"])
+                for k, a in zip(list(per)[1:], arr):
+                    per[k].append(gap_metrics(a, obs, st, L)["NSE"])
+            rows.append(dict(name=name, length=L, n_seeds=len(files), ens_median_NSE=np.nanmedian(per["ens"]),
+                             seedmean_median_NSE=np.mean([np.nanmedian(v) for k, v in per.items() if k != "ens"])))
+    df = pd.DataFrame(rows)
+    print(df.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
+    df.to_csv(out / "score.csv", index=False)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("stage", choices=["predict", "report"])
+    ap.add_argument("stage", choices=["predict", "report", "score"])
+    ap.add_argument("--period", default="test", choices=["test", "validation"],
+                    help="predict/score: validation = WY1981-89, for choosing between ConvCNP variants")
     ap.add_argument("run_dir", nargs="*")
     ap.add_argument("--gpu", type=int, default=0)
     ap.add_argument("--lengths", type=int, nargs="+", default=LENGTHS)
@@ -270,7 +312,11 @@ def main():
     ap.add_argument("--out", default=str(OUT))
     args = ap.parse_args()
     if args.stage == "predict":
-        predict(args.run_dir, args.gpu, args.lengths, args.mask_seed, args.basin_file, Path(args.out))
+        out = Path(args.out) / "validation" if args.period == "validation" else Path(args.out)
+        predict(args.run_dir, args.gpu, args.lengths, args.mask_seed, args.basin_file, out, args.period)
+    elif args.stage == "score":
+        out = Path(args.out) / "validation" if args.period == "validation" else Path(args.out)
+        score(args.run_dir, args.lengths, args.mask_seed, out)
     else:
         report(args.lengths, args.mask_seed, Path(args.out))
 

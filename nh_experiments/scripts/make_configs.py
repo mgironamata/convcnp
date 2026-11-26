@@ -167,6 +167,10 @@ CONVCNP_GSS_GAPFILL = dict(
     CONVCNP_GSS, predict_last_n=642, validate_every=None,
     convcnp=dict(CONVCNP_GSS["convcnp"], causal=False, gap_inputs=["QObs(mm/d)_shift0"],
                  gap_len_range=[1, 120], gap_count_range=[2, 6]))
+# Candidate (a), more loss signal per window: 4-10 gaps instead of 2-6 (about twice the scored days). Choose between
+# gapfill variants on the validation period only (eval_gapfill.py predict/score --period validation).
+CONVCNP_GSS_GAPFILL_DENSE = dict(
+    CONVCNP_GSS_GAPFILL, convcnp=dict(CONVCNP_GSS_GAPFILL["convcnp"], gap_count_range=[4, 10]))
 GAPFILL = dict(AR, lagged_features={"QObs(mm/d)": [0]}, autoregressive_inputs=["QObs(mm/d)_shift0"],
                random_holdout_from_dynamic_features={})
 
@@ -174,6 +178,7 @@ EXPERIMENTS = {
     "convcnp_gss_ar50": (CONVCNP_GSS, "kratzert2019", AR),
     "convcnp_gss_ar0": (CONVCNP_GSS, "kratzert2019", AR0),
     "convcnp_gss_gapfill": (CONVCNP_GSS_GAPFILL, "kratzert2019", GAPFILL),
+    "convcnp_gss_gapfill_dense": (CONVCNP_GSS_GAPFILL_DENSE, "kratzert2019", GAPFILL),
     "lstm_mm_multi": (LSTM_MM, "kratzert2019", MULTI),
     "lstm_ir_multi": (LSTM_IR, "kratzert2019", MULTI),
     "convcnp_gss_multi": (CONVCNP_GSS, "kratzert2019", MULTI),
