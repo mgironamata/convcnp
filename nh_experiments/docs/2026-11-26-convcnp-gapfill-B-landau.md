@@ -99,3 +99,56 @@ Local commits on `nh-experiments` (convcnp repo):
 - 4825273: model, config, evaluator, 32 tests.
 
 Queue script: `convcnp_runs/gapfill_queue.sh`. Nothing is pushed, and this note is not committed in agent-coordinator.
+
+## Addendum: rescaling check (dispatch 9edba9b), 2026-11-26
+
+**What was done:** CPU only, on the saved study B predictions. The LSTM baseline's rescaling was applied unchanged to the gap-fill ConvCNP and the no-flow ConvCNP: the observed/simulated volume ratio over the 7 days before and after each gap, interpolated linearly across the gap. The gaps, masks and basins are the same as before, and all models are 3-seed ensembles. In the tables below, "rescaled" means this correction was applied.
+
+### Median NSE and KGE on gap days
+
+The win rate is the share of basins in which the method beats the rescaled LSTM-IR (NSE / KGE).
+
+| method | 7-day NSE | 7-day KGE | 7-day win rate | 30-day NSE | 30-day KGE | 30-day win rate | 90-day NSE | 90-day KGE | 90-day win rate |
+|---|---|---|---|---|---|---|---|---|---|
+| LSTM-IR | 0.829 | 0.786 | 34 / 23% | 0.811 | 0.781 | 44 / 35% | **0.808** | 0.769 | 55 / 49% |
+| **LSTM-IR, rescaled** | **0.856** | **0.861** | — | **0.826** | **0.827** | — | 0.791 | 0.767 | — |
+| gss-gapfill | 0.836 | 0.822 | 36 / 31% | 0.811 | 0.792 | 44 / 37% | 0.805 | **0.771** | 50 / 44% |
+| gss-gapfill, rescaled | 0.854 | 0.853 | 44 / 44% | 0.801 | 0.809 | 38 / 39% | 0.769 | 0.756 | 41 / 41% |
+| gss-noQ | 0.798 | 0.738 | 23 / 18% | 0.784 | 0.735 | 33 / 26% | 0.774 | 0.721 | 43 / 39% |
+| gss-noQ, rescaled | 0.841 | 0.847 | 31 / 41% | 0.797 | 0.803 | 33 / 37% | 0.759 | 0.737 | 35 / 38% |
+
+Rescaled gss vs rescaled LSTM, Wilcoxon p (NSE):
+
+| comparison | 7-day | 30-day | 90-day |
+|---|---|---|---|
+| gss-gapfill, rescaled | 0.02 | 7e-6 | 9e-5 |
+| gss-noQ, rescaled | 6e-12 | 3e-11 | 7e-11 |
+
+### Gain from rescaling itself
+
+Paired by basin. The median difference is rescaled minus raw; the win rate is the share of basins where rescaling helps.
+
+| model | 7-day NSE | 7-day KGE | 30-day NSE | 30-day KGE | 90-day NSE | 90-day KGE |
+|---|---|---|---|---|---|---|
+| LSTM-IR | +0.025 (66%) | +0.062 (77%) | +0.010 (56%) | +0.037 (65%) | −0.010 (45%) | +0.002 (51%) |
+| gss-gapfill | +0.015 (62%) | +0.038 (69%) | −0.001 (50%) | +0.020 (58%) | −0.011 (42%) | −0.001 (50%) |
+| gss-noQ | +0.041 (73%) | +0.095 (81%) | +0.013 (57%) | +0.062 (73%) | −0.008 (44%) | +0.012 (54%) |
+
+### Verdict
+
+**Rescaling helps the no-flow ConvCNP at least as much as the LSTM, but the gap-fill ConvCNP less.**
+- For gss-noQ the gain is larger than the LSTM's on every gap length: on 7-day gaps +0.041 NSE vs +0.025, and +0.095 KGE vs +0.062. Its simulation has larger volume errors near the gaps, so there is more to correct.
+- For gss-gapfill the gain is smaller: on 7-day gaps +0.015 vs +0.025, and on 30-day gaps nothing. It already uses the observed flow around the gap, so rescaling and its own context use overlap.
+- All three models: rescaling hurts NSE on 90-day gaps. A ratio taken from 7 days of edge flow is too noisy to apply across 90 days.
+
+**After rescaling, the ranking is the same and the LSTM still wins.**
+- The rescaled LSTM beats rescaled gss-gapfill (which wins in only 38–44% of basins, NSE p ≤ 0.02) and rescaled gss-noQ (31–35%, p ≤ 7e-11) on every gap length.
+- The closest result is on 7-day gaps: rescaled gss-gapfill scores 0.854 vs 0.856, with a median basin difference of −0.005.
+
+**Conclusion.** The remaining gap is the ConvCNP's weaker underlying simulation, not the correction step. Rescaling narrows the 7-day gap to the LSTM but does not close it at any gap length.
+
+**Files.**
+- `convcnp_runs/gapfill_report_bc.txt`
+- `gapfill_basin_metrics.csv`
+- `gapfill_paired.csv`: now includes KGE and these extra pairs.
+- Code: `eval_gapfill.py report`, committed locally.

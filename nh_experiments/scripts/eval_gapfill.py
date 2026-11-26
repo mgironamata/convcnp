@@ -218,6 +218,9 @@ def report(lengths, mask_seed: int, out: Path):
                 methods[m] = np.mean(arr, axis=0)
                 for k, a in enumerate(arr, 1):
                     methods[f"{m} s{k}"] = a
+            # the LSTM baseline's rescaling, applied identically to the ConvCNPs (ensemble simulations)
+            methods["gss-gapfill + bias corr."] = bias_correct(methods["gss-gapfill"], obs, starts, L)
+            methods["gss-noQ sim + bias corr."] = bias_correct(methods["gss-noQ sim"], obs, starts, L)
             for m, s in methods.items():
                 rows.append(dict(basin=basin, length=L, method=m, **gap_metrics(s, obs, starts, L)))
     df = pd.DataFrame(rows)
@@ -228,16 +231,23 @@ def report(lengths, mask_seed: int, out: Path):
     seedmean = (seeds.groupby(["model", "method", "length"]).NSE.median().groupby(["model", "length"]).mean()
                 .unstack("length"))
     ref = "gss-gapfill"
+    bc = " + bias corr."
+    pairs = [(ref, m) for m in df.method.unique() if m != ref and not re.search(r" s\d$", m)]
+    pairs += [(f"gss-gapfill{bc}", f"LSTM-IR sim{bc}"), (f"gss-noQ sim{bc}", f"LSTM-IR sim{bc}"),
+              (f"gss-gapfill{bc}", f"gss-noQ sim{bc}"), (f"gss-gapfill{bc}", "LSTM-IR sim"),
+              # effect of the rescaling itself, per model
+              (f"LSTM-IR sim{bc}", "LSTM-IR sim"), (f"gss-gapfill{bc}", "gss-gapfill"), (f"gss-noQ sim{bc}", "gss-noQ sim")]
     comp = []
     for L in lengths:
-        a = df[(df.method == ref) & (df.length == L)].set_index("basin").NSE
-        for m in df.method.unique():
-            if m == ref or re.search(r" s\d$", m):
-                continue
-            b = df[(df.method == m) & (df.length == L)].set_index("basin").NSE
-            d = (a - b).dropna()
-            comp.append(dict(length=L, a=ref, b=m, n=len(d), win_rate=(d > 0).mean(), median_diff=d.median(),
-                             wilcoxon_p=wilcoxon(d).pvalue if (d != 0).any() else np.nan))
+        sub = df[df.length == L]
+        for x, y in pairs:
+            for metric in ("NSE", "KGE"):
+                a = sub[sub.method == x].set_index("basin")[metric]
+                b = sub[sub.method == y].set_index("basin")[metric]
+                d = (a - b).dropna()
+                comp.append(dict(length=L, metric=metric, a=x, b=y, n=len(d), win_rate=(d > 0).mean(),
+                                 median_diff=d.median(),
+                                 wilcoxon_p=wilcoxon(d).pvalue if (d != 0).any() else np.nan))
     comp = pd.DataFrame(comp)
     with pd.option_context("display.width", 250, "display.max_columns", 30, "display.float_format", "{:.3f}".format):
         print("median over basins, metrics on gap days (ensembles = 3-seed mean simulation)")
