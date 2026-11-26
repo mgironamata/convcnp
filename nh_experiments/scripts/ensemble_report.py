@@ -10,6 +10,8 @@
                                                              # gss / LSTM masked mean / LSTM input replacing, 3 seeds
   python nh_experiments/scripts/ensemble_report.py daymet  # Daymet-only missing data: gss vs LSTM input replacing
   python nh_experiments/scripts/ensemble_report.py daymet_nomask  # + gss trained without masking (control)
+  python nh_experiments/scripts/ensemble_report.py ar      # Nearing et al. 2022 setting: gss with lagged observed Q,
+                                                           # trained with 50% / 0% Q holdout, test Q missing 0-100%
 
 Ensembles average the members' simulated series and recompute the metrics (summarize.ensemble_metrics).
 """
@@ -129,6 +131,33 @@ def main(which):
         print("median NSE, mean of single seeds\n", sm.round(3).to_string())
         g.to_csv(f"{R}/{out}_median_nse.csv"); sm.to_csv(f"{R}/{out}_seedmean_median_nse.csv")
         table(rows, comps, out)
+    elif which == "ar":
+        S = Path(R) / "missing_scenarios"
+        scen = ["clean", "qhold_p25", "qhold_p50", "qhold_p75", "qhold_p100"]
+        models = {"gss-AR50": "convcnp_gss_ar50", "gss-AR0": "convcnp_gss_ar0"}
+        # Reference without streamflow input: gss on the same 3 products and periods (trained with p_time=p_seq=0.1
+        # input masking, so slightly handicapped on clean forcings). It does not see Q, so one score fits all columns.
+        rows = {"gss-noQ clean": ens([S / run_dir("convcnp_gss_multi", k).name / "clean" for k in (1, 2, 3)])}
+        noq_seed = np.mean([single(S / run_dir("convcnp_gss_multi", k).name / "clean").NSE.median() for k in (1, 2, 3)])
+        comps, grid, seedmean = [], {}, {}
+        for sc in scen:
+            for m, cfg in models.items():
+                rows[f"{m} {sc}"] = ens([S / run_dir(cfg, k).name / sc for k in (1, 2, 3)])
+                grid.setdefault(m, {})[sc] = rows[f"{m} {sc}"].NSE.median()
+                seedmean.setdefault(m, {})[sc] = np.mean([single(S / run_dir(cfg, k).name / sc).NSE.median()
+                                                          for k in (1, 2, 3)])
+            grid.setdefault("gss-noQ", {})[sc] = rows["gss-noQ clean"].NSE.median()
+            seedmean.setdefault("gss-noQ", {})[sc] = noq_seed
+            comps += [(f"gss-AR50 {sc}", f"gss-AR0 {sc}"), (f"gss-AR50 {sc}", "gss-noQ clean"),
+                      (f"gss-AR0 {sc}", "gss-noQ clean")]
+        for m, cfg in models.items():
+            for k in (1, 2, 3):
+                rows[f"{m} s{k} clean"] = single(S / run_dir(cfg, k).name / "clean")
+        g, sm = pd.DataFrame(grid), pd.DataFrame(seedmean)
+        print("median NSE, 3-seed ensembles\n", g.round(3).to_string())
+        print("median NSE, mean of single seeds\n", sm.round(3).to_string())
+        g.to_csv(f"{R}/ar_median_nse.csv"); sm.to_csv(f"{R}/ar_seedmean_median_nse.csv")
+        table(rows, comps, "ar")
     else:
         sys.exit(__doc__)
 
