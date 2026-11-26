@@ -430,3 +430,44 @@ def test_gap_scenario_masks():
     assert (two[0] == two[1]).all()
     assert (group_masks(1000, "b", "gap_p30", 1, [None]) == group_masks(1000, "b", "gap_p30", 1, [None])).all()
     assert SCENARIOS_SINGLE == ["clean", "indep_p10", "indep_p30", "indep_p50", "gap_p10", "gap_p30", "gap_p50"]
+
+
+def test_lagged_streamflow_input_is_used_causally_and_nan_ok():
+    ar = "QObs(mm/d)_shift1"
+    cfg = make_cfg(lagged_features={"QObs(mm/d)": [1]}, autoregressive_inputs=[ar],
+                   convcnp={"encoder_scales": [0.25, 2.0], "decoder_scales": [0.25], "decoder_identity": True})
+    torch.manual_seed(0)
+    m = ConvCNP(cfg).eval()
+    assert m.dynamic_inputs[-1] == ar and len(m.dynamic_inputs) == len(DYN) + 1
+    b = make_batch()
+    b["x_d"][ar] = torch.randn(2, 200, 1)
+    y0 = m(clone(b))["y_hat"]
+    b2 = clone(b); b2["x_d"][ar] = b["x_d"][ar].clone(); b2["x_d"][ar][:, 150:] += 5.0
+    y1 = m(b2)["y_hat"]
+    assert y0.shape[1] == 200 and torch.allclose(y0[:, :150], y1[:, :150], atol=1e-6)   # causal in the lagged Q
+    assert not torch.allclose(y0[:, 150:], y1[:, 150:])                                  # and it is used
+    full0 = m(clone(b))["y_hat"]
+    b3 = clone(b); b3["x_d"][ar] = b["x_d"][ar].clone(); b3["x_d"][ar][:, 120:140] = float("nan")
+    y3 = m(b3)["y_hat"]
+    assert torch.isfinite(y3).all() and not torch.allclose(y3, full0)
+    with pytest.raises(ValueError):
+        ConvCNP(make_cfg(lagged_features={"QObs(mm/d)": [1]}, autoregressive_inputs=[ar], convcnp={"causal": False}))
+
+
+def test_qhold_masks_and_sampler():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import numpy as np
+    import eval_missing_scenarios as ems
+    assert ems.SCENARIOS_AR == ["clean", "qhold_p25", "qhold_p50", "qhold_p75", "qhold_p100"]
+    m = ems.qhold_mask(200000, "b", "qhold_p50")
+    assert abs(m.mean() - 0.5) < 0.02
+    starts = np.flatnonzero(m[1:] & ~m[:-1])
+    assert abs(m.sum() / len(starts) - ems.QHOLD_MEAN_DAYS) < 0.3
+    assert ems.qhold_mask(100, "b", "qhold_p100").all()
+    assert (ems.qhold_mask(5000, "b", "qhold_p25") == ems.qhold_mask(5000, "b", "qhold_p25")).all()
+    ems.STATE.update(scenario="qhold_p50", basin="b", mask_seed=0)
+    x = np.arange(5000.0)
+    out = ems._qhold_sampler(x, 0.5, 5)
+    assert np.isnan(out).sum() == ems.qhold_mask(5000, "b", "qhold_p50").sum() and not np.isnan(x).any()
+    ems.STATE["scenario"] = "clean"
+    assert ems._qhold_sampler(x, 0.5, 5) is x

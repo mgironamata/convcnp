@@ -16,6 +16,9 @@ Scenarios (``SCENARIOS``):
   gap_pXX            all products missing together in contiguous gaps covering XX% of days on average; gap
                      lengths are geometric with mean GAP_MEAN_DAYS (two-state Markov chain, stationary start)
   keep_<products>    the other products are missing for the whole period (experiment 2)
+  qhold_pXX          runs with lagged observed streamflow (``autoregressive_inputs``, Nearing et al. 2022): the
+                     observed-Q input is missing on XX% of days in contiguous runs of mean length QHOLD_MEAN_DAYS
+                     (their scheme); forcings untouched. ``clean`` on such runs = all observations available.
 
 ConvCNP runs are evaluated in one causal pass over each basin's full series (``--fast-convcnp``, default
 on). Every layer is causal and per-time-step, so this gives the same last-step predictions as
@@ -40,6 +43,7 @@ from convcnp_nh import register  # noqa: E402
 register()
 
 import torch  # noqa: E402
+import neuralhydrology.datasetzoo.basedataset as nh_basedataset  # noqa: E402
 import neuralhydrology.datasetzoo.camelsus as camelsus  # noqa: E402
 import neuralhydrology.evaluation.tester as nh_tester  # noqa: E402
 from neuralhydrology.evaluation.evaluate import start_evaluation  # noqa: E402
@@ -53,6 +57,9 @@ SCENARIOS = (["clean"] + [f"indep_p{p}" for p in (10, 30, 50)] + [f"allday_p{p}"
 # single-product runs (one feature group): indep == allday, so random days vs contiguous gaps
 SCENARIOS_SINGLE = ["clean"] + [f"indep_p{p}" for p in (10, 30, 50)] + [f"gap_p{p}" for p in (10, 30, 50)]
 GAP_MEAN_DAYS = 10
+# lagged-streamflow runs: missing observations at test time, Nearing et al. 2022 (mean missing run length 5 d)
+SCENARIOS_AR = ["clean"] + [f"qhold_p{p}" for p in (25, 50, 75, 100)]
+QHOLD_MEAN_DAYS = 5
 STATE = {"scenario": "clean", "groups": None, "mask_seed": 0}
 
 
@@ -80,16 +87,9 @@ def group_masks(n_days: int, basin: str, scenario: str, n_groups: int, group_pro
         p = int(arg[1:]) / 100
         hidden[:] = rng.random(n_days) < p
     elif kind == "gap":
-        p, L = int(arg[1:]) / 100, GAP_MEAN_DAYS
-        p_start, p_end = p / (L * (1 - p)), 1 / L
-        u = rng.random(n_days)
-        miss = np.empty(n_days, dtype=bool)
-        state = u[0] < p
-        for t in range(n_days):
-            if t:
-                state = (u[t] >= p_end) if state else (u[t] < p_start)
-            miss[t] = state
-        hidden[:] = miss
+        hidden[:] = markov_mask(n_days, int(arg[1:]) / 100, GAP_MEAN_DAYS, rng)
+    elif kind == "qhold":
+        pass                                   # forcings untouched; see _qhold_sampler
     elif kind == "keep":
         keep = set(arg.split("_"))
         if not keep <= set(PRODUCTS) or None in group_products:
@@ -101,8 +101,40 @@ def group_masks(n_days: int, basin: str, scenario: str, n_groups: int, group_pro
     return hidden
 
 
+def markov_mask(n_days: int, p: float, mean_len: float, rng) -> np.ndarray:
+    """Contiguous missing runs: two-state Markov chain with stationary missing fraction p, geometric run lengths
+    of mean ``mean_len``, stationary start."""
+    if p >= 1:
+        return np.ones(n_days, dtype=bool)
+    if p <= 0:
+        return np.zeros(n_days, dtype=bool)
+    p_start, p_end = p / (mean_len * (1 - p)), 1 / mean_len
+    u = rng.random(n_days)
+    miss = np.empty(n_days, dtype=bool)
+    state = u[0] < p
+    for t in range(n_days):
+        if t:
+            state = (u[t] >= p_end) if state else (u[t] < p_start)
+        miss[t] = state
+    return miss
+
+
+def qhold_mask(n_days: int, basin: str, scenario: str, mask_seed: int = 0) -> np.ndarray:
+    rng = np.random.default_rng(zlib.crc32(f"{mask_seed}|{basin}|{scenario}".encode()))
+    return markov_mask(n_days, int(scenario.partition("_p")[2]) / 100, QHOLD_MEAN_DAYS, rng)
+
+
+def _qhold_sampler(data, missing_fraction, mean_missing_length):
+    """Deterministic stand-in for samplingutils.bernoulli_subseries_sampler (used for the observed-Q input only)."""
+    if not STATE["scenario"].startswith("qhold"):
+        return data
+    data = np.array(data, dtype=float, copy=True)
+    data[qhold_mask(len(data), STATE["basin"], STATE["scenario"], STATE["mask_seed"])] = np.nan
+    return data
+
+
 def apply_scenario(df, basin: str, scenario: str, groups: list[list[str]], mask_seed: int = 0):
-    if scenario == "clean":
+    if scenario == "clean" or scenario.startswith("qhold"):     # qhold: only the lagged-Q input, see _qhold_sampler
         return df
     prods = [product_of(g[0]) for g in groups]
     hidden = group_masks(len(df), basin, scenario, len(groups), prods, mask_seed)
@@ -116,10 +148,12 @@ def _patch_loader():
     original = camelsus.CamelsUS._load_basin_data
 
     def _load_basin_data(self, basin):
+        STATE["basin"] = basin                 # the holdout sampler runs right after loading, per basin
         df = original(self, basin)
         return apply_scenario(df, basin, STATE["scenario"], STATE["groups"], STATE["mask_seed"])
 
     camelsus.CamelsUS._load_basin_data = _load_basin_data
+    nh_basedataset.samplingutils.bernoulli_subseries_sampler = _qhold_sampler
 
 
 def _fast_convcnp_evaluate(self, model, loader, frequencies, save_all_output=False):
@@ -180,6 +214,12 @@ def main():
             upd = {"device": "cpu" if args.gpu < 0 else f"cuda:{args.gpu}", "batch_size": args.batch_size}
             if args.basin_file:
                 upd["test_basin_file"] = args.basin_file
+            if cfg.autoregressive_inputs:      # replace the training-time random holdout by the scenario's fixed mask
+                upd["random_holdout_from_dynamic_features"] = (
+                    {c: {"missing_fraction": 0.5, "mean_missing_length": QHOLD_MEAN_DAYS}
+                     for c in cfg.autoregressive_inputs} if scenario.startswith("qhold") else {})
+            elif scenario.startswith("qhold"):
+                raise ValueError(f"{scenario} needs a run with autoregressive_inputs")
             cfg.update_config(upd)
             fast = cfg.model.lower() == "convcnp" and not args.no_fast_convcnp
             nh_tester.BaseTester._evaluate = _fast_convcnp_evaluate if fast else original_evaluate

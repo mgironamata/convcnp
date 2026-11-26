@@ -198,6 +198,12 @@ class ConvCNP(BaseModel):
         # A list of lists (feature groups, e.g. one per forcing product) is flattened: groups only matter for
         # neuralhydrology's training-time NaN simulation (nan_step/sequence_probability), which drops by group.
         self.dynamic_inputs = list(cfg.dynamic_inputs_flattened)
+        # Lagged observed streamflow (Nearing et al. 2022 setting): neuralhydrology appends `autoregressive_inputs`
+        # (e.g. QObs(mm/d)_shift1) to x_d after sample validation, so windows with missing observations are kept.
+        # Here they are ordinary input channels; missing values go through the density channel (no substitution).
+        if cfg.autoregressive_inputs and not p["causal"]:
+            raise ValueError("autoregressive_inputs need a causal ConvCNP (the lagged target would leak otherwise).")
+        self.dynamic_inputs += [c for c in cfg.autoregressive_inputs if c not in self.dynamic_inputs]
         n_dyn = len(self.dynamic_inputs)
         if cfg.evolving_attributes:
             raise ValueError("ConvCNP does not support evolving_attributes; add them to dynamic_inputs instead.")

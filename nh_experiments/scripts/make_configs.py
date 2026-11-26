@@ -144,7 +144,21 @@ LSTM_MM = dict(LSTM, nan_handling_method="masked_mean", epochs=35,
 LSTM_IR = dict(LSTM, nan_handling_method="input_replacing", nan_handling_pos_encoding_size=5, epochs=30,
                dynamics_embedding=dict(type="fc", hiddens=[17, 10], activation="relu", dropout=0.0))
 
+# --- Near-real-time streamflow as input (Nearing et al. 2022, HESS 26, 5493-5513) ----------------------------------
+# 531 basins, Kratzert 2019 periods, all three forcing products (15 inputs, no forcing masking), observed Q at lag 1 as
+# an extra input. Missing Q: contiguous runs with mean length 5 d (neuralhydrology `random_holdout_from_dynamic_features`,
+# their sampler); they train at 50 % (main setting) and 0 %. The ConvCNP sees Q through its density channel; the
+# LSTMs are not re-trained here -- we compare against their published numbers.
+AR = dict(
+    forcings=MULTI["forcings"], dynamic_inputs=[v for g in MULTI["dynamic_inputs"] for v in g],
+    lagged_features={"QObs(mm/d)": [1]}, autoregressive_inputs=["QObs(mm/d)_shift1"],
+    random_holdout_from_dynamic_features={"QObs(mm/d)_shift1": {"missing_fraction": 0.5, "mean_missing_length": 5}},
+)
+AR0 = dict(AR, random_holdout_from_dynamic_features={})
+
 EXPERIMENTS = {
+    "convcnp_gss_ar50": (CONVCNP_GSS, "kratzert2019", AR),
+    "convcnp_gss_ar0": (CONVCNP_GSS, "kratzert2019", AR0),
     "lstm_mm_multi": (LSTM_MM, "kratzert2019", MULTI),
     "lstm_ir_multi": (LSTM_IR, "kratzert2019", MULTI),
     "convcnp_gss_multi": (CONVCNP_GSS, "kratzert2019", MULTI),

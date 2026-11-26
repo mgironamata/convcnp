@@ -109,7 +109,8 @@ def _dry_run(cfg: Config):
             "test_start_date", "test_end_date", "data_dir", "run_dir", "output_dropout", "output_activation",
             "weight_decay", "ema_decay", "alpha_loss_weight", "peak_loss_weight", "loss_warmup_updates",
             "forcings", "nan_handling_method", "nan_step_probability", "nan_sequence_probability",
-            "nan_handling_pos_encoding_size", "dynamics_embedding"]
+            "nan_handling_pos_encoding_size", "dynamics_embedding", "lagged_features", "autoregressive_inputs",
+            "random_holdout_from_dynamic_features"]
     for k in keys:
         try:
             print(f"  {k:24s} {getattr(cfg, k)}")
