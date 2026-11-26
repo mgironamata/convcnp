@@ -152,3 +152,51 @@ Paired by basin. The median difference is rescaled minus raw; the win rate is th
 - `gapfill_basin_metrics.csv`
 - `gapfill_paired.csv`: now includes KGE and these extra pairs.
 - Code: `eval_gapfill.py report`, committed locally.
+
+## Addendum 2: mixed ConvCNP + LSTM ensembles (a hybrid), 2026-11-26 night, CPU only
+
+**This is a hybrid, not "ConvCNP beats LSTM".** These ensembles use LSTM output.
+
+**What was done**
+- Each mix is a fixed 50/50 average of the 3-seed ConvCNP ensemble and the 3-seed LSTM-IR simulation ensemble. No weights were fitted and nothing was tuned on test data.
+- "Rescaled" again means the 7-day edge-ratio correction.
+- Each mix is compared with the matched LSTM: raw with raw, rescaled with rescaled.
+- **Control:** the same mix built with the no-flow ConvCNP. If ensemble size alone (6 members vs 3) explained the gain, this control would gain as much.
+
+### Median NSE on gap days
+
+| method | 7-day | 30-day | 90-day |
+|---|---|---|---|
+| LSTM-IR simulation | 0.829 | 0.811 | 0.808 |
+| mix: gss-gapfill + LSTM | **0.844** | **0.826** | **0.822** |
+| control mix: gss-noQ + LSTM | 0.823 | 0.814 | 0.804 |
+| LSTM-IR, rescaled | 0.856 | 0.826 | 0.791 |
+| mix: gss-gapfill + LSTM, rescaled | **0.866** | 0.825 | **0.797** |
+| control mix: gss-noQ + LSTM, rescaled | 0.860 | 0.824 | 0.792 |
+
+### Paired by basin, against the matched LSTM
+
+Win rate and Wilcoxon p, for NSE and then KGE.
+
+| mix | 7-day | 30-day | 90-day |
+|---|---|---|---|
+| gss-gapfill + LSTM vs LSTM-IR | NSE 79% (3e-40); KGE 70% (1e-18) | NSE 70% (5e-19); KGE 62% (2e-7) | NSE 62% (2e-6); KGE 51% (0.8) |
+| same, rescaled vs rescaled LSTM-IR | NSE 63% (1e-13); KGE 52% (0.3) | NSE 57% (1e-5); KGE 49% (0.7) | NSE 60% (2e-7); KGE 48% (0.8) |
+| control: gss-noQ + LSTM vs LSTM-IR | NSE 42–48%; KGE 28–33% | | |
+| control, rescaled vs rescaled LSTM-IR | NSE 51–54%, median differences of 0.002 or less; KGE about 46% | | |
+
+The control row ranges are across the three gap lengths.
+
+### Verdict
+
+**Adding the gap-fill ConvCNP to the LSTM improves gap filling consistently on NSE, at every gap length, with and without rescaling.**
+- The mix wins in 57–79% of basins, all with p ≤ 1e-5.
+- On KGE it gains only before rescaling.
+
+**The gain comes from the ConvCNP's use of the observed flow around the gap, not from ensemble size.** The equally sized control mix with the no-flow ConvCNP gains nothing.
+
+**Caveats**
+- This is a hybrid result. A pure-LSTM counterpart (a bidirectional LSTM with the same gap training) has not been trained.
+- The control member, gss-noQ, is weaker than gss-gapfill, because it was trained with forcing masking.
+
+Source: `convcnp_runs/gapfill_report_mix.txt`.
