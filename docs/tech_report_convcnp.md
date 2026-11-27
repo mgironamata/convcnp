@@ -214,7 +214,7 @@ All LSTMs are neuralhydrology models, configured in `nh_experiments/scripts/make
      - The target is set to missing everywhere except on hidden days inside the loss region, so the model is never rewarded for copying its input.
    - **Validation.** In-training validation is off, because neuralhydrology's tester never hides the discharge input and would score a copy of the target.
    - No forcing masking. All other settings are as in `gss`.
-   - A denser variant (`convcnp_gss_gapfill_dense`, 4–10 gaps per window) is configured but not trained.
+   - A denser variant (`convcnp_gss_gapfill_dense`, 4–10 gaps per window) was trained on 2026-11-27 and rejected on validation (section 4.8).
 
 ### 3.5 Changes to neuralhydrology
 
@@ -626,7 +626,13 @@ Single-seed means for `gss`-gapfill are 0.823 / 0.793 / 0.784. The median absolu
 - **Rescaled mix against the rescaled LSTM-IR.** NSE wins in 63 / 57 / 60% (p ≤ 1e-5). KGE is tied (48–52%, p ≥ 0.3).
 - **The control mixes.** They win in 42–54% of basins on NSE, with median differences of 0.004 or less.
 
-**Validation reference for later selection.** On WY1981–89, `gss`-gapfill scores 0.823 / 0.808 / 0.776 as an ensemble and 0.808 / 0.791 / 0.755 as a mean of single seeds, on the same three gap lengths. No variant has been compared against it yet.
+**Selection on validation: denser gap training (2026-11-27).**
+- **Run.** `convcnp_gss_gapfill_dense` hides 4–10 gaps per training window instead of 2–6, with otherwise identical settings. 3 seeds, trained 06:10–06:45Z on the owner's go typed in camels; 3 jobs, 5.7 GB.
+- **Validation.** Both variants were scored on the validation period (WY1981–89) with the same gap rules. Median NSE on gap days (7 / 30 / 90 days):
+  - `gss`-gapfill: ensemble 0.823 / 0.808 / 0.776; mean of single seeds 0.808 / 0.791 / 0.755.
+  - `gss`-gapfill-dense: ensemble 0.811 / 0.802 / 0.778; mean of single seeds 0.793 / 0.783 / 0.755.
+- **Decision.** The dense variant is worse on 7- and 30-day gaps and level on 90-day gaps, so it is rejected. It was not evaluated on the test period. More scored days per window did not help the model use the surrounding streamflow.
+- Source: `convcnp_runs/gapfill_dense_val_score.txt`; queue `convcnp_runs/gapfill_dense_queue.sh`.
 
 **Observations.**
 - **The ConvCNP alone does not beat the practical standard.** On 7-day gaps the rescaled LSTM simulation is clearly better and has half the volume error. On 30- and 90-day gaps the two are statistically tied. The plain LSTM simulation, which never sees streamflow, beats `gss`-gapfill on 90-day gaps.
@@ -705,7 +711,7 @@ None of these is a like-for-like win on a standard benchmark.
 - **Sensitivity to the training record is unresolved.** The difference between the 9-year and 15-year splits is small for single ConvCNP seeds (section 4.6), and the splits also differ in test decade.
 
 **Candidate next steps.** None has been launched; GPU runs need the owner's go typed in the camels session.
-1. **`convcnp_gss_gapfill_dense`** (4–10 gaps per window). Selection on validation only; about 40 min for 3 seeds.
+1. ~~`convcnp_gss_gapfill_dense`~~: run on 2026-11-27, rejected on validation (section 4.8).
 2. **A ConvCNP given the LSTM simulation as an input (hybrid).** It would learn only the correction from the surrounding observations. It needs LSTM-IR predictions for the training and validation periods first.
 3. **A bidirectional LSTM with the same gap training.** This is the fair pure-LSTM competitor for study B: about 1 day of engineering plus 15–18 GPU-hours.
 4. **An unmasked three-product gss-noQ.** It would remove the masking confound in studies A and B; about 1.4 h per seed.
